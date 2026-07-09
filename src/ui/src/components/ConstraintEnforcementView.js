@@ -4,11 +4,11 @@ import SecurityIcon from '@mui/icons-material/Security';
 import WarningIcon from '@mui/icons-material/Warning';
 
 const CONSTRAINT_LEVELS = [
-  { id: 'T0', name: 'Unconstrained', desc: 'Full autonomy — no restrictions', color: 'default' },
-  { id: 'T1', name: 'Advisory', desc: 'Recommendations only — agent chooses', color: 'info' },
-  { id: 'T2', name: 'Supervised', desc: 'Human approval required for critical actions', color: 'warning' },
-  { id: 'T3', name: 'Guardrailed', desc: 'Hard limits on scope and capability', color: 'secondary' },
-  { id: 'T4', name: 'Prohibited', desc: 'No execution — read-only observation', color: 'error' },
+  { id: 'T0', name: 'Audit Trail',     desc: "Every action is logged — foundational, always on", color: 'info' },
+  { id: 'T1', name: 'Crypto Identity', desc: "Every agent gets a non-human identity it can't fake — foundational, always on", color: 'info' },
+  { id: 'T2', name: 'Guardrailed',     desc: 'Operational policies constrain what the agent can do', color: 'warning' },
+  { id: 'T3', name: 'Policy-Driven',   desc: 'Advanced governance — rate limits, decision routing', color: 'secondary' },
+  { id: 'T4', name: 'Autonomous',      desc: 'Full self-operation under declared constraints', color: 'success' },
 ];
 
 const ConstraintEnforcementView = ({ constraints = [], agents = [] }) => {

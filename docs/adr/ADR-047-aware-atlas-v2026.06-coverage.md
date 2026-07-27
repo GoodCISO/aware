@@ -439,3 +439,7 @@ Same three integration points as AST10 (ADR-043 §"Integration points"):
 - EchoLeak (AML.CS0059): zero-click prompt injection in M365 Copilot
 - AI in the Middle (AML.CS0061): web AI services as C2 relays
 - Semantic Kernel RCE (AML.CS0062): single prompt → host-level RCE
+- LeakyLMs (arXiv:2607.20723v1, 2026): remote-API timing side-channels
+  against hosted LLMs. Out of ATLAS's current taxonomy; tracked
+  separately in `docs/security/threat-model.md` (consumer-side risk
+  for AWARE agents calling third-party LLM APIs via the RLM primitive).

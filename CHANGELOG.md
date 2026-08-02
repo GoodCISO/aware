@@ -103,6 +103,10 @@ d8c470a docs(adr)+catalog: add ADR-055 + reconcile A.2.4/A.7.4/A.9.3
 
 (Excludes: `65171a4` v2.8.0 release metadata; `156d58d` v2.9.0 release metadata; `77701f1` / `e89b16e` / `d69ac27` merge commits — content carried by the non-merge commits above.)
 
+### Naming history
+
+Prior marketing materials used "Adaptive Workflow Agent with Recursive Evolution" — a real acronym from earlier iterations of the product. Canonical expansion since v2.8.0 is "Autonomous Compliance Infrastructure for AI Agents". Full historical context: see `NAMING.md` (S354, commit `a5c7bfd`).
+
 
 ## [2.10.0] — 2026-07-21 — OWASP AST10 support (ADR-048)
 

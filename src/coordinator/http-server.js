@@ -387,6 +387,26 @@ export async function startServer(opts = {}) {
     }
   });
 
+  // v2026-07-12 fix raised serverTimeout from 0 (Node default) to 35s. The
+  // HTTP server previously had no socket-level timeout, so a request that
+  // hung downstream (e.g. Ollama inference stuck at GPU) would keep the
+  // socket open forever, exhausting the server's max-open-sockets and
+  // producing `kind=unreachable` floods at the gateway plugin layer.
+  //
+  // 2026-07-13 bump (kanban t_588d8b89): 35s -> 60s. Default-mode (K=4,
+  // standard) /coordinate calls measure ~29.4s end-to-end with tail
+  // variance that occasionally crossed the 35s ceiling and was closed at
+  // the socket, surfacing as `kind=unreachable`. 60s = outer hook
+  // timeout (30000ms) + inner fetch budget (28000ms) + ~2s of socket-
+  // idle tail, with comfortable headroom for the p99 of the slow path.
+  // Anything beyond that is a genuinely hung request we want to abort at
+  // the socket.
+  //
+  // Note: must be set as a property on the server instance, not via the
+  // createServer options object — verified 2026-07-12 that the options
+  // variant is silently ignored (server.timeout stays 0).
+  server.timeout = 60_000;
+
   // Listen on the requested port; resolve when ready.
   await new Promise((resolve, reject) => {
     const onError = (err) => reject(err);

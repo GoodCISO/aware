@@ -171,6 +171,122 @@ test('buildDefaultOllamaClient hits /api/generate and returns response field', a
   }
 });
 
+// === t_aa407e5e (2026-07-12): AWARE-flavored qwen3.5 + think-mode preamble ===
+//
+// The architect (t_aa407e5e) proved two production facts that this file now
+// encodes as tests:
+//   1. The default model in buildDefaultOllamaClient is `aware-qwen35-9b:latest`,
+//      not the generic `qwen2.5:7b` baseline. Same Ollama daemon hosts the
+//      AWARE-LoRA-merged Q4_K_M build under that name.
+//   2. qwen3.5 emits a `Thinking Process:` preamble by default on Ollama 0.31.x.
+//      `num_think` and Modelfile `PARAMETER think` don't apply; only the
+//      per-request `think: false` body field does. The downstream coordinator
+//      pair-generator expects a clean `reasoning` field, so the default must
+//      include `think: false`.
+
+test('buildDefaultOllamaClient defaults model to aware-qwen35-9b:latest (AWARE-LoRA merged)', async () => {
+  // No opts.model → production default should resolve to the AWARE-flavored model.
+  let captured;
+  const server = createServer((req, res) => {
+    let body = '';
+    req.on('data', (c) => { body += c; });
+    req.on('end', () => {
+      captured = JSON.parse(body);
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ response: 'ok' }));
+    });
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const port = server.address().port;
+  try {
+    const client = buildDefaultOllamaClient(`http://127.0.0.1:${port}`);
+    await client.generate('ping');
+    assert.equal(captured.model, 'aware-qwen35-9b:latest',
+      'default model must be the AWARE-flavored qwen3.5-9b, not qwen2.5:7b');
+  } finally {
+    server.close();
+  }
+});
+
+test('buildDefaultOllamaClient sends think:false by default to suppress qwen3.5 preamble', async () => {
+  // Without think:false, qwen3.5 on Ollama 0.31.x returns a 74-char
+  // "Thinking Process:" preamble instead of the answer. The coordinator's
+  // pair-generator feeds `reasoning` directly into the downstream prompt,
+  // so the preamble would leak. Verify the body always carries think:false
+  // unless the caller explicitly opts in via opts.think.
+  let captured;
+  const server = createServer((req, res) => {
+    let body = '';
+    req.on('data', (c) => { body += c; });
+    req.on('end', () => {
+      captured = JSON.parse(body);
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ response: 'ok' }));
+    });
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const port = server.address().port;
+  try {
+    const client = buildDefaultOllamaClient(`http://127.0.0.1:${port}`);
+    await client.generate('ping');
+    assert.equal(captured.think, false,
+      'think must default to false so qwen3.5 does not emit Thinking Process: preamble');
+  } finally {
+    server.close();
+  }
+});
+
+test('buildDefaultOllamaClient forwards opts.think=true to enable thinking-mode (opt-in only)', async () => {
+  // Escape hatch: callers who want the preamble (e.g. for PRM scoring) can
+  // explicitly enable thinking via opts.think. Verified so we don't accidentally
+  // hardcode think:false and break PRM integration later.
+  let captured;
+  const server = createServer((req, res) => {
+    let body = '';
+    req.on('data', (c) => { body += c; });
+    req.on('end', () => {
+      captured = JSON.parse(body);
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ response: 'ok' }));
+    });
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const port = server.address().port;
+  try {
+    const client = buildDefaultOllamaClient(`http://127.0.0.1:${port}`);
+    await client.generate('ping', { think: true });
+    assert.equal(captured.think, true,
+      'opts.think=true must round-trip to the Ollama body so PRM-style callers can opt in');
+  } finally {
+    server.close();
+  }
+});
+
+test('buildDefaultOllamaClient still allows opts.model override for legacy callers', async () => {
+  // The legacy `model: 'qwen2.5:7b'` path must still work — some smoke
+  // tests and old fixtures pin that model name explicitly.
+  let captured;
+  const server = createServer((req, res) => {
+    let body = '';
+    req.on('data', (c) => { body += c; });
+    req.on('end', () => {
+      captured = JSON.parse(body);
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ response: 'ok' }));
+    });
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const port = server.address().port;
+  try {
+    const client = buildDefaultOllamaClient(`http://127.0.0.1:${port}`);
+    await client.generate('ping', { model: 'qwen2.5:7b' });
+    assert.equal(captured.model, 'qwen2.5:7b',
+      'opts.model must override the default to preserve legacy callers');
+  } finally {
+    server.close();
+  }
+});
+
 test('buildDefaultOllamaClient throws on non-2xx with error body included', async () => {
   const server = createServer((req, res) => {
     res.writeHead(500, { 'content-type': 'text/plain' });

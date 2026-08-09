@@ -139,6 +139,7 @@ EXPOSE 8080
 # namespace or via an explicit Docker network. Operators exposing the
 # coordinator publicly MUST set COORDINATOR_HOST=0.0.0.0 explicitly and
 # place an authenticating reverse proxy in front.
+#
 ENV COORDINATOR_HOST=127.0.0.1 \
     COORDINATOR_PORT=8080 \
     AWARE_REQUEST_TIMEOUT_MS=120000 \

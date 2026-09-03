@@ -29,6 +29,12 @@ const TaskCategory = {
   SECURITY_REVIEW: 'security-review',
   DATA_ANALYSIS: 'data-analysis',
   COORDINATION: 'coordination',
+  // NOTES_TO_REVIEWER — content the user wants surfaced as editorial /
+  // review notes (reviewer guidance, inline feedback, "please review" intent).
+  // Triggers a separate pheromone matrix so review-note traffic does NOT
+  // contaminate code-generation routing (similar isolation rationale as
+  // SECURITY_REVIEW vs CODE_GENERATION).
+  NOTES_TO_REVIEWER: 'notes-to-reviewer',
   GENERAL: 'general'
 };
 
@@ -149,6 +155,11 @@ function getDefaultDecayRate(category) {
     [TaskCategory.SECURITY_REVIEW]: 0.20,
     [TaskCategory.DATA_ANALYSIS]: 0.03,
     [TaskCategory.COORDINATION]: 0.30,
+    // NOTES_TO_REVIEWER: slower decay (0.07) — review-note patterns are
+    // durable across sessions (a style note flagged today still applies
+    // tomorrow). Sits between RESEARCH (0.05, very long-lived knowledge)
+    // and GENERAL (0.10, short-lived catch-all).
+    [TaskCategory.NOTES_TO_REVIEWER]: 0.07,
     [TaskCategory.GENERAL]: 0.10
   };
   return rates[category] || 0.10;

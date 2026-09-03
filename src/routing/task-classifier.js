@@ -29,6 +29,18 @@ const KEYWORD_PATTERNS = {
     'function', 'class', 'module', 'api', 'endpoint',
     'code', 'script', 'algorithm', 'database', 'query'
   ],
+  // NOTES_TO_REVIEWER is checked BEFORE RESEARCH on purpose: keyword
+  // matching is case-insensitive substring, and RESEARCH owns the word
+  // 'review'. Reviewer-note phrases ("reviewer notes", "flag for
+  // review") all contain the substring "review" or "reviewer" and would
+  // otherwise match RESEARCH first. We rely on NOTES_TO_REVIEWER's
+  // compound phrases being more specific than RESEARCH's single-word
+  // 'review' — and on the loop visiting NOTES_TO_REVIEWER first.
+  [TaskCategory.NOTES_TO_REVIEWER]: [
+    'notes to reviewer', 'reviewer notes',
+    'editorial notes', 'feedback notes', 'reviewer feedback',
+    'leave a note', 'flag for review', 'note for reviewer'
+  ],
   [TaskCategory.RESEARCH]: [
     'research', 'find', 'analyse', 'investigate', 'compare',
     'review', 'survey', 'explore', 'evaluate', 'assess',
@@ -130,6 +142,7 @@ function getCategoryPriority(category) {
     [TaskCategory.CODE_GENERATION]: 80,
     [TaskCategory.DATA_ANALYSIS]: 60,
     [TaskCategory.RESEARCH]: 40,
+    [TaskCategory.NOTES_TO_REVIEWER]: 30,  // Above COORDINATION — reviewer intent outranks routing intent
     [TaskCategory.COORDINATION]: 20,
     [TaskCategory.GENERAL]: 0           // Lowest — default
   };

@@ -79,6 +79,22 @@ configures both.
 INTERFACE
 =========
 
+Task categories (kept in sync with src/routing/pheromone-table.js → TaskCategory):
+
+    code-generation      — write/implement/refactor/debug/test
+    research             — investigate/explore/compare/review
+    security-review      — vulnerability/audit/pentest/CVE
+    data-analysis        — metrics/charts/correlation/aggregation
+    coordination         — orchestrate/route/dispatch/schedule
+    disclaimer-piling    — t_9881cd1d: stacked/over-redundant disclaimer content
+    general              — default fallback (no keywords)
+
+AZR does not enforce this registry at runtime — categories travel in the
+solver prompt and reward shaping, not the executor. This block is the
+authoritative registry reference for AZR-side reviewers and for the
+notes-to-reviewer / disclaimer-piling lineage. Keep in sync when adding
+new entries to pheromone-table.js.
+
     from azr.executor import SandboxExecutor, ExecutionResult, verify
 
     executor = SandboxExecutor(

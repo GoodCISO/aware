@@ -35,6 +35,7 @@ const TaskCategory = {
   // contaminate code-generation routing (similar isolation rationale as
   // SECURITY_REVIEW vs CODE_GENERATION).
   NOTES_TO_REVIEWER: 'notes-to-reviewer',
+  DISCLAIMER_PILING: 'disclaimer-piling',  // t_9881cd1d: stacked/over-redundant disclaimer content
   GENERAL: 'general'
 };
 
@@ -160,6 +161,7 @@ function getDefaultDecayRate(category) {
     // tomorrow). Sits between RESEARCH (0.05, very long-lived knowledge)
     // and GENERAL (0.10, short-lived catch-all).
     [TaskCategory.NOTES_TO_REVIEWER]: 0.07,
+    [TaskCategory.DISCLAIMER_PILING]: 0.25,  // t_9881cd1d: medium-fast decay — content drifts as model updates ship
     [TaskCategory.GENERAL]: 0.10
   };
   return rates[category] || 0.10;

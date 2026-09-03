@@ -60,6 +60,15 @@ const KEYWORD_PATTERNS = {
     'orchestrate', 'coordinate', 'delegate', 'route', 'schedule',
     'assign', 'dispatch', 'manage', 'organise', 'allocate'
   ],
+  [TaskCategory.DISCLAIMER_PILING]: [
+    // t_9881cd1d: stacked/over-redundant disclaimer content detection.
+    // Keywords target the failure mode (piling/repetition) and the surface
+    // artefact (disclaimers, safety notes, "as an AI" preambles).
+    'disclaimer', 'disclaimers', 'disclaim', 'safety notice', 'safety notes',
+    'as an ai', 'as a language model', 'i cannot', 'i am unable',
+    'redundant', 'over-redundant', 'stacked', 'repetitive', 'piling',
+    'caveat', 'caveats', 'warning text', 'preamble', 'hedging'
+  ],
   // GENERAL has no keywords — default fallback
 };
 
@@ -144,6 +153,7 @@ function getCategoryPriority(category) {
     [TaskCategory.RESEARCH]: 40,
     [TaskCategory.NOTES_TO_REVIEWER]: 30,  // Above COORDINATION — reviewer intent outranks routing intent
     [TaskCategory.COORDINATION]: 20,
+    [TaskCategory.DISCLAIMER_PILING]: 25,  // t_9881cd1d: between COORDINATION and RESEARCH — content-quality, but not security-critical
     [TaskCategory.GENERAL]: 0           // Lowest — default
   };
   return priorities[category] ?? 0;

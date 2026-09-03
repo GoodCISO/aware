@@ -10,6 +10,7 @@
 # SECURITY_REVIEW     | Minutes              | 0.20/hour  | High-stakes, must adapt fast to new vulnerabilities
 # DATA_ANALYSIS       | Hours                | 0.03/hour  | Stable patterns, slow drift
 # COORDINATION        | Seconds              | 0.30/hour  | Near-real-time, high turnover
+# NOTES_TO_REVIEWER   | Hours                | 0.07/hour  | t_4f06c7fc — review-note patterns persist across sessions
 # DISCLAIMER_PILING   | Hours                | 0.25/hour  | t_9881cd1d — stacked/over-redundant disclaimer content drifts with model updates
 # GENERAL             | Variable             | 0.10/hour  | Default
 
@@ -20,6 +21,7 @@ pheromone:
     security-review: 0.20
     data-analysis: 0.03
     coordination: 0.30
+    notes-to-reviewer: 0.07
     disclaimer-piling: 0.25
     general: 0.10
 

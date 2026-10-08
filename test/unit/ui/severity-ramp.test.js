@@ -141,17 +141,62 @@ test('measured figures match the ones documented in severityRamp.js', () => {
 });
 
 test('no severity token aliases a semantic palette colour it must not merge with', () => {
-  // The card rejected repointing severity at primary.main, because merging
-  // two meanings into one token is worse than a new token. Guard the specific
-  // pair the card measured: the brand primary vs MUI's info blue, which sit
-  // at 1.50:1 contrast. Severity must not silently adopt either.
-  const PRIMARY_MAIN = '#00e5ff';
-  const MUI_INFO = '#29b6f6';
+  // WHY THIS SHAPE (a prior version of this guard named the same principle
+  // but hardcoded two hexes -- PRIMARY_MAIN and MUI_INFO -- so it could only
+  // ever catch those two. PROVEN: repointing LOW at error.main (#ff1744) left
+  // this test green while a different test went red. The principle is what we
+  // are guarding, so the principle is what gets asserted: no severity step may
+  // share a colour with ANY other palette entry, wherever that colour lives.
+  //
+  // TWO TRAPS that made the earlier rewrite unfailable, both avoided here:
+  //   1. A Map<value, owner> COLLAPSES duplicates -- the second owner silently
+  //      overwrites the first, so the exact collision this guard hunts becomes
+  //      invisible. Map<string, string[]> keeps every owner.
+  //   2. Exempting on owner.startsWith('severity.') is a no-op on this theme,
+  //      because theme.palette.severity IS a palette slot -- every severity
+  //      value would be exempt and the guard could never fail. The exemption is
+  //      therefore scoped to the specific owner, not the prefix.
+  const { realTheme, paletteColours } = require('../helpers/ui-real-theme');
+  const palette = realTheme().palette;
+
+  // value (lowercased) -> every owner that publishes it. Arrays, not strings:
+  // a duplicate is the bug, so it must not be collapsed.
+  const ownersByValue = new Map();
+  for (const { owner, value } of paletteColours(palette)) {
+    const key = value.toLowerCase();
+    if (!ownersByValue.has(key)) ownersByValue.set(key, []);
+    ownersByValue.get(key).push(owner);
+  }
+
   for (const level of SEVERITY_LEVELS) {
-    const c = SEVERITY_RAMP[level];
-    assert.notEqual(c.toLowerCase(), PRIMARY_MAIN,
-      `${level} aliases primary.main; severity needs its own token`);
-    assert.notEqual(c.toLowerCase(), MUI_INFO,
-      `${level} aliases MUI info; severity needs its own token`);
+    const colour = SEVERITY_RAMP[level];
+    const owners = ownersByValue.get(colour.toLowerCase()) || [];
+    // A severity step legitimately owns itself. Anything ELSE publishing the
+    // same colour is a merge of two meanings into one token.
+    const foreignOwners = owners.filter((o) => o !== `severity.${level}`);
+    assert.deepEqual(foreignOwners, [],
+      `${level} is ${colour}, which is also published by ${foreignOwners.join(', ')}. ` +
+      'A severity step that shares a colour with a semantic token merges two ' +
+      'meanings into one; give it its own colour instead.');
+  }
+});
+
+test('the semantic palette the guard walks is the REAL one, not a copy', () => {
+  // The guard above is only as good as the palette it walks. Pin the load path
+  // so a future refactor cannot quietly point it at a hand-typed subset --
+  // which would restore exactly the unfailable property it was rewritten to
+  // remove.
+  const { realTheme, paletteColours, THEME_PATH } = require('../helpers/ui-real-theme');
+  const colours = paletteColours(realTheme().palette);
+  assert.ok(THEME_PATH.endsWith('src/ui/src/styles/theme.js'),
+    `the guard must read the shipped theme, got ${THEME_PATH}`);
+  assert.ok(colours.length >= 20,
+    `expected the full resolved palette (>=20 colour leaves), got ${colours.length}; ` +
+    'the guard would be walking a subset');
+  // Spot-check that the semantic families the original two-literal guard named
+  // are genuinely present, i.e. the walk reaches real semantic slots.
+  const owners = colours.map((c) => c.owner);
+  for (const expected of ['primary.main', 'info.main', 'error.main', 'warning.main', 'success.main', 'secondary.main']) {
+    assert.ok(owners.includes(expected), `palette walk is missing ${expected}`);
   }
 });

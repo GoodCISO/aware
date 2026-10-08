@@ -34,11 +34,11 @@ const AppSidebar = () => {
           width: DRAWER_WIDTH,
           boxSizing: 'border-box',
           backgroundColor: 'background.paper',
-          borderRight: '1px solid rgba(255,255,255,0.08)',
+          borderRight: (theme) => `1px solid ${theme.palette.overlay.divider}`,
         },
       }}
     >
-      <Box sx={{ p: 2, borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
+      <Box sx={{ p: 2, borderBottom: (theme) => `1px solid ${theme.palette.overlay.divider}` }}>
         <Typography variant="subtitle2" color="primary.main" fontWeight={700} letterSpacing={1.5}>
           AWARE
         </Typography>
@@ -55,9 +55,13 @@ const AppSidebar = () => {
                 component={Link}
                 to={item.path}
                 sx={{
-                  backgroundColor: isActive ? 'rgba(0, 229, 255, 0.1)' : 'transparent',
+                  // overlay.active is primary.main at 10%, derived by alpha().
+                  // The literal form looked token-correct (it WAS the right
+                  // colour) but could not follow primary.main if it moved.
+                  backgroundColor: (theme) =>
+                    isActive ? theme.palette.overlay.active : 'transparent',
                   borderRight: isActive ? '3px solid primary.main' : '3px solid transparent',
-                  '&:hover': { backgroundColor: 'rgba(255,255,255,0.05)' },
+                  '&:hover': { backgroundColor: (theme) => theme.palette.overlay.hover },
                 }}
               >
                 <ListItemIcon sx={{ color: isActive ? 'primary.main' : 'text.secondary' }}>

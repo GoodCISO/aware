@@ -16,14 +16,20 @@ const Z_SCORE_THRESHOLDS = {
 };
 
 /**
- * Severity levels
+ * Severity levels.
+ *
+ * RE-EXPORTED from src/monitoring/severity-contract.js rather than declared
+ * here: this is the ladder the whole product is supposed to agree on (the
+ * detector is the real producer -- the server.js seed array is stand-in
+ * data), so it is the one place the levels are DEFINED. See card t_517be819
+ * for the four-vocabulary collision this replaced, re-landed on main by
+ * t_775073b4.
  */
-const Severity = {
-  LOW: 'LOW',
-  MEDIUM: 'MEDIUM',
-  HIGH: 'HIGH',
-  CRITICAL: 'CRITICAL'
-};
+const { SEVERITY_LEVELS } = require('./severity-contract');
+const Severity = SEVERITY_LEVELS.reduce((acc, level) => {
+  acc[level] = level;
+  return acc;
+}, Object.create(null));
 
 /**
  * AnomalyDetector - detects anomalies using z-score methodology

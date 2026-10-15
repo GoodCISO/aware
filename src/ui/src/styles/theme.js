@@ -66,6 +66,24 @@ const theme = createTheme({
       main: '#ff1744',
       light: '#ff616f',
       dark: '#c5001e',
+      // PINNED, and this is the only fill whose derived label failed AA.
+      // MUI's contrastThreshold derivation resolves rgba(0,0,0,0.87) for the
+      // other five semantic fills and #fff for red ALONE -- red is the sole
+      // outlier in the derived family, and the sole failure: white on #ff1744
+      // is 3.85:1, below the 4.5:1 text bar, and it renders (Chip color="error"
+      // in KillSwitchControls.js, the alert Badge in AppHeader.js, and seven
+      // more components).
+      //
+      // Pinning the DERIVED value is the fix; darkening the fill is not. The
+      // fill does double duty -- label background AND border/icon accent -- so
+      // it owes 4.5:1 to its label and 3.0:1 to each surface. #d32f2f fixes
+      // the label (4.98:1) and breaks the surface use (2.74:1 on paper).
+      // Pinning contrastText fixes the label (5.05:1) and leaves #ff1744 --
+      // and therefore every border, icon and outline using it -- untouched.
+      //
+      // Guarded for the whole derived family, not just this slot, by
+      // test/unit/ui/fill-contrast.test.js.
+      contrastText: 'rgba(0, 0, 0, 0.87)',
     },
     warning: {
       main: '#ff9100',

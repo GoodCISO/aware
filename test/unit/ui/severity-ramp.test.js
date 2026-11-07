@@ -23,6 +23,11 @@ const { SEVERITY_LEVELS } = require('../../../src/monitoring/severity-contract')
 // The UI-side modules are ESM (webpack under react-scripts has no CJS interop),
 // so they are pulled in through the test-only bridge. See helpers/ui-esm.js.
 const { severityRamp } = require('../helpers/ui-esm');
+// The dE00 metric, vendored (no dependency) and validated against the
+// published Sharma/Wu/Dalal corpus in ciede2000.test.js.
+const { ciede2000, hexToLab } = require('../helpers/ciede2000');
+const fs = require('node:fs');
+const path = require('node:path');
 
 // Must match theme.js background tokens -- the surfaces the border sits on.
 const BG_DEFAULT = '#0a1929';
@@ -200,3 +205,169 @@ test('the semantic palette the guard walks is the REAL one, not a copy', () => {
     assert.ok(owners.includes(expected), `palette walk is missing ${expected}`);
   }
 });
+
+// ---------------------------------------------------------------------------
+// The dE00 separation figure (card t_4e9cb292).
+//
+// WHY THIS BLOCK EXISTS: the ramp's header comment quotes "the worst PAIR in
+// this ramp is HIGH/MEDIUM at dE00 6.44". That figure was COMMENT-ONLY -- the
+// file itself said "THIS dE00 is comment-only, so it can drift again". A
+// figure nothing can re-derive cannot be defended, and it cannot fail when it
+// changes: the ramp's tokens could be edited and the comment would keep
+// asserting a number that no longer described them, with every other guard in
+// this file still green. So the figure is now COMPUTED from the committed
+// tokens and asserted here.
+//
+// A correct number and a protected number are different things. This block is
+// the difference.
+// ---------------------------------------------------------------------------
+
+const RAMP_SOURCE_PATH = path.resolve(__dirname, '../../../src/ui/src/styles/severityRamp.js');
+
+// The documented figure, and the pair it is attributed to. Both are asserted
+// against the measurement, so neither can be quietly edited.
+const DOCUMENTED_WORST_PAIR = 'HIGH/MEDIUM';
+const DOCUMENTED_WORST_DE00 = 6.44;
+// The card's own aspirational bar (t_517be819 asked for dE00 16.7 separation).
+// This is a figure of RECORD, not a measurement of this ramp -- it is what the
+// ramp does NOT reach. It is pinned so it cannot be quietly rewritten either.
+const DOCUMENTED_CARD_BAR = 16.7;
+// The measurement is deterministic (a pure function of the committed hexes),
+// so the tolerance only absorbs the rounding of the documented 2-decimal
+// figure -- it is not slack for a drifting ramp.
+const DE00_TOLERANCE = 0.005;
+
+/**
+ * Every unordered pair of severity levels, with its CIEDE2000 distance.
+ * The worst (smallest) pair is the ramp's separation guarantee.
+ */
+function pairwiseDe00(ramp) {
+  const labs = {};
+  for (const level of SEVERITY_LEVELS) labs[level] = hexToLab(ramp[level]);
+  const pairs = [];
+  for (let i = 0; i < SEVERITY_LEVELS.length; i++) {
+    for (let j = i + 1; j < SEVERITY_LEVELS.length; j++) {
+      const a = SEVERITY_LEVELS[i];
+      const b = SEVERITY_LEVELS[j];
+      pairs.push({
+        pair: `${a}/${b}`,
+        de00: ciede2000(labs[a], labs[b]),
+      });
+    }
+  }
+  return pairs;
+}
+
+test('the worst-pair dE00 matches the figure documented in severityRamp.js', () => {
+  const pairs = pairwiseDe00(SEVERITY_RAMP);
+  assert.equal(pairs.length, 6,
+    `expected one dE00 per unordered pair of 4 levels, got ${pairs.length}`);
+  const worst = pairs.reduce((min, p) => (p.de00 < min.de00 ? p : min));
+  const measured = worst.de00;
+
+  assert.ok(Math.abs(measured - DOCUMENTED_WORST_DE00) <= DE00_TOLERANCE,
+    `the ramp's worst pair measures dE00 ${measured.toFixed(4)}, but `
+    + `severityRamp.js documents ${DOCUMENTED_WORST_DE00}. `
+    + 'A ramp edit changed the separation; recompute the figure and update '
+    + 'the comment together, or the separation guarantee is no longer the '
+    + 'one that was measured.');
+
+  assert.equal(worst.pair, DOCUMENTED_WORST_PAIR,
+    `the worst pair is now ${worst.pair} at dE00 ${measured.toFixed(4)}, but `
+    + `severityRamp.js documents ${DOCUMENTED_WORST_PAIR}. The comment names a `
+    + 'specific pair; if the worst pair moved, both the figure and the pair '
+    + 'name need updating.');
+});
+
+test('the dE00 figure QUOTED IN THE SOURCE COMMENT matches the measurement', () => {
+  // The measurement above pins a NUMBER. This pins the COMMENT to that number,
+  // so the prose in the shipped UI bundle cannot drift away from the tokens
+  // it describes. The file's own header already made this promise ("Re-measured
+  // by test/unit/ui/severity-ramp.test.js, which recomputes every figure above
+  // and fails if this comment drifts from the committed values") -- the WCAG
+  // figures were covered; the dE00 figure was not, and this closes it.
+  const source = fs.readFileSync(RAMP_SOURCE_PATH, 'utf8');
+  const worst = pairwiseDe00(SEVERITY_RAMP).reduce((min, p) => (p.de00 < min.de00 ? p : min));
+
+  // TWO KINDS OF dE00 FIGURE APPEAR IN THIS COMMENT, and conflating them is
+  // the trap this test has to avoid:
+  //   1. the RAMP'S OWN measured worst pair  -- re-derivable, asserted against
+  //      the computation below; and
+  //   2. the CARD'S ASPIRATIONAL BAR (16.7) -- the separation the original
+  //      card asked for and this ramp does not reach. It is a figure of
+  //      record, not a measurement of this ramp, and it cannot be recomputed
+  //      from the tokens. It is pinned as a constant so it cannot be quietly
+  //      rewritten either.
+  // A first cut of this guard scanned every "dE00 <n>" in the file and
+  // required each to equal the measured worst pair -- which failed on the
+  // 16.7 bar. That failure was the guard being wrong, not the comment.
+  const quoted = [...source.matchAll(/dE00\s+(\d+(?:\.\d+)?)/g)].map((m) => Number(m[1]));
+  assert.ok(quoted.length > 0,
+    'no dE00 figure found in severityRamp.js -- the comment was rewritten and '
+    + 'the documented separation guarantee may have been dropped');
+
+  const measured = worst.de00;
+  for (const figure of quoted) {
+    const isMeasured = Math.abs(figure - measured) <= DE00_TOLERANCE;
+    const isCardBar = Math.abs(figure - DOCUMENTED_CARD_BAR) <= DE00_TOLERANCE;
+    assert.ok(isMeasured || isCardBar,
+      `severityRamp.js quotes dE00 ${figure}, which is neither this ramp's `
+      + `measured worst pair (${measured.toFixed(4)}) nor the card's bar `
+      + `(${DOCUMENTED_CARD_BAR}). The comment must quote the measurement.`);
+  }
+
+  // And the specific claim the comment makes -- the ramp's own worst pair --
+  // is asserted against the measurement by name, so a comment that kept 16.7
+  // while dropping the 6.44 could not pass.
+  //
+  // The source is a block comment, so the claim may be split across lines
+  // with a leading "* " on each. The pattern therefore tolerates comment
+  // decoration between the words -- it must not require the claim to sit on
+  // one line, or a harmless re-wrap would break the guard.
+  const worstClaim = source.match(
+    /worst PAIR in this ramp is[\s*]+([A-Z]+\/[A-Z]+)[\s*]+at dE00[\s*]+(\d+(?:\.\d+)?)/,
+  );
+  assert.ok(worstClaim,
+    'severityRamp.js no longer states which pair is the worst and what it '
+    + 'measures; the separation guarantee is documented in prose only');
+  assert.equal(worstClaim[1], DOCUMENTED_WORST_PAIR,
+    `the comment attributes the worst pair to ${worstClaim[1]}, but the ramp's `
+    + `worst pair is ${worst.pair}`);
+  assert.ok(Math.abs(Number(worstClaim[2]) - measured) <= DE00_TOLERANCE,
+    `the comment says the worst pair (${worstClaim[1]}) measures dE00 `
+    + `${worstClaim[2]}, but it measures ${measured.toFixed(4)}`);
+});
+
+
+test('the ramp\'s separation ORDER is the documented one: HIGH/MEDIUM tightest, CRITICAL/LOW widest', () => {
+  // A first cut of this block asserted only that no pair is below the ramp's
+  // worst pair -- which is true BY CONSTRUCTION (the worst pair is the
+  // minimum), so it could never fail. A test that cannot fail is not a guard.
+  // It was replaced with this one, which states a real property of the ramp:
+  // WHICH pairs are tight and which are wide. That can fail, and it was seen
+  // failing -- see the falsification in the card evidence.
+  const pairs = pairwiseDe00(SEVERITY_RAMP);
+  const sorted = [...pairs].sort((a, b) => a.de00 - b.de00);
+  const tightest = sorted[0];
+  const widest = sorted[sorted.length - 1];
+
+  assert.equal(tightest.pair, DOCUMENTED_WORST_PAIR,
+    `the tightest pair is ${tightest.pair} at dE00 ${tightest.de00.toFixed(4)}, `
+    + `not ${DOCUMENTED_WORST_PAIR}. The ramp's separation is distributed `
+    + 'differently than documented.');
+  assert.equal(widest.pair, 'CRITICAL/LOW',
+    `the widest pair is ${widest.pair} at dE00 ${widest.de00.toFixed(4)}, not `
+    + 'CRITICAL/LOW. The two ends of the ordinal ramp should be the furthest '
+    + 'apart.');
+
+  // The spread itself, as a property of the ramp rather than of one figure:
+  // the two ends must be far enough apart for the ramp to read as an ordinal
+  // scale end-to-end.
+  const spread = widest.de00 - tightest.de00;
+  assert.ok(spread >= 20,
+    `the ramp's dE00 spread is ${spread.toFixed(4)} (${tightest.pair} `
+    + `${tightest.de00.toFixed(2)} to ${widest.pair} ${widest.de00.toFixed(2)}); `
+    + 'the ends of an ordinal ramp must be clearly separated');
+});
+
+

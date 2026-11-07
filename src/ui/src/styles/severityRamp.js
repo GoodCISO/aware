@@ -23,13 +23,23 @@
  * order, not hue.
  *
  * KNOWN LIMIT, stated rather than hidden: the worst PAIR in this ramp is
- * HIGH/MEDIUM at dE00 6.1. The card asked for levels that read as clearly
+ * HIGH/MEDIUM at dE00 6.44. The card asked for levels that read as clearly
  * separate tokens and cited dE00 16.7 as its own bar. That bar is NOT
  * reachable by any single-hue ramp here: an exhaustive search of the AWARE
  * cyan gamut (hue 187, sat 100%, L 80-99) subject to the 3:1 floor and
- * monotonic contrast tops out at dE00 6.1, and the constraint is geometric —
+ * monotonic contrast tops out at dE00 6.44, and the constraint is geometric —
  * a 4-step single-hue ramp spanning only the luminances that clear 3:1 on
  * paper #132f4c has a fixed lightness budget to divide into 3 gaps.
+ *
+ * FIGURE PROVENANCE: 6.44 is MEASURED, not asserted.
+ * test/unit/ui/severity-ramp.test.js recomputes the worst pair's dE00 from
+ * the committed tokens below, using the corpus-validated CIEDE2000 in
+ * test/unit/helpers/ciede2000.js (which is itself checked against the
+ * published Sharma/Wu/Dalal reference corpus on every run), and fails if
+ * either figure quoted above stops matching the measurement. The figure
+ * previously read 6.1 here, measured by a script that was never committed, so
+ * the number could not be re-derived and could not be protected; it now can
+ * be both. Recompute rather than cite if you change these tokens.
  *
  * Two things follow, and they are why this is not merely a token swap:
  *   1. Colour alone is NOT a sufficient severity signal at the 4th level.

@@ -1,6 +1,6 @@
 import { alpha, createTheme } from '@mui/material/styles';
 
-import { AUDIT_DECISION, CONSTRAINT_T3, METRIC_VALUE } from './domainAliases';
+import { AUDIT_DECISION, CONSTRAINT_T3, METRIC_VALUE, SECONDARY } from './domainAliases';
 import { SEVERITY_RAMP } from './severityRamp';
 
 // Alpha-tint family. These rgba() literals were previously hand-decoded in
@@ -30,18 +30,25 @@ const theme = createTheme({
       light: '#6effff',
       dark: '#00b2cc',
     },
-    secondary: {
-      // Was #7c4dff, which measures 2.84:1 on background.paper and so fails
-      // WCAG AA for body text. #a180ff measures 4.58:1 on paper and 5.95:1 on
-      // background.default. This is the one change in this commit that is NOT
-      // zero-visual-change — it is a deliberate, measured contrast fix, and it
-      // is the value the three domain aliases below were derived against, so
-      // landing them apart would leave the aliases shadowing a value no longer
-      // in the theme.
-      main: '#a180ff', // 4.58:1 on paper, 5.95:1 on default — AA body text
-      light: '#d6c7ff',
-      dark: '#8f6fff',
-    },
+    // `secondary` is the token the three domain aliases below shadow, and it
+    // is NOT declared here: the values live in ./domainAliases.js and are
+    // imported, so there is ONE literal for the ramp rather than two that
+    // agree only by hand.
+    //
+    // Why that matters: those three aliases claim to shadow this token, so a
+    // re-hue of `secondary` that did not reach them would leave three
+    // semantic domains rendering a colour the theme no longer holds. Two
+    // hand-copied literals could drift apart with every guard still green --
+    // the aliases' own guard only ever compared the aliases to their own
+    // copy, never to the theme. The coupling is now structural (one object),
+    // and it is also asserted by test/unit/ui/domain-aliases.test.js, which
+    // walks the REAL resolved palette.
+    //
+    // The value itself is unchanged: #a180ff measures 4.58:1 on
+    // background.paper and 5.95:1 on background.default (AA body text). It
+    // was previously #7c4dff, which measures 2.84:1 on paper and so failed
+    // WCAG AA for body text.
+    secondary: SECONDARY,
     // Explicit `info` ramp, declared at exactly MUI v5.18's own resolved
     // defaults so this is GOVERNANCE ONLY and provably zero-visual-change.
     //

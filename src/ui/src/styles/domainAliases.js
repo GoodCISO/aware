@@ -15,7 +15,26 @@
  *     Same split the sibling severity ramp uses.
  */
 
-/** The token every alias shadows. Contrast figures are WCAG 2.x, dark surfaces. */
+/**
+ * The token every alias shadows. Contrast figures are WCAG 2.x, dark surfaces.
+ *
+ * This is the SINGLE SOURCE OF TRUTH for the secondary ramp. theme.js imports
+ * this object for `palette.secondary` rather than re-declaring the same three
+ * hexes, so there is one literal for the ramp instead of two that agree only
+ * by hand.
+ *
+ * WHY IT IS HERE AND NOT IN theme.js: this module lives outside theme.js, and
+ * imports nothing, for two reasons:
+ *   - theme.js must stay the only module that talks to MUI;
+ *   - the test suite runs under `node --test` from the repo root, where
+ *     @mui/* does not resolve (the UI is a separate deployable with its own
+ *     node_modules). A pure data module is importable from both.
+ *     Same split the sibling severity ramp uses.
+ *
+ * The coupling is not left to convention: test/unit/ui/domain-aliases.test.js
+ * asserts that the REAL resolved `theme.palette.secondary` still equals this
+ * object field for field, so the two can never drift apart silently.
+ */
 export const SECONDARY = {
   // 4.58:1 on background.paper, 5.95:1 on background.default — AA body text.
   main: '#a180ff',

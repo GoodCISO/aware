@@ -31,6 +31,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const { domainAliases } = require('../helpers/ui-esm');
+const { realTheme } = require('../helpers/ui-real-theme');
 
 const UI_SRC = path.join(__dirname, '..', '..', '..', 'src', 'ui', 'src');
 
@@ -125,6 +126,104 @@ test('every alias is a full twin -- main, light, dark and contrastText all match
         `secondary.${field} is ${JSON.stringify(SECONDARY[field])}; ` +
         'a partial copy is a partial visual change');
     }
+  }
+});
+
+// ---- the coupling to the REAL theme (the guard that was missing) ----
+
+test('the aliases shadow the REAL theme.palette.secondary, not a hand-copy of it', () => {
+  // THE COUPLING GUARD. Everything above this line compares the aliases to
+  // SECONDARY -- the copy domainAliases.js holds -- so all of it stayed green
+  // while the theme's own `secondary` moved to a different value. The three
+  // aliases would then shadow a colour the theme no longer held, which is
+  // exactly the failure domainAliases.js's header warns about.
+  //
+  // It walks the REAL resolved palette via the repo's own babel bridge, so
+  // what is compared is what the app ships -- not a hand-typed copy of the
+  // palette, which would drift the moment the theme moves and then the guard
+  // would be asserting that the copy agrees with itself.
+  //
+  // The contrast guards (fill-contrast.test.js) cannot stand in for this:
+  // mutating `secondary.main` trips a CONTRAST invariant, but mutating
+  // `secondary.dark` -- which no contrast guard reads -- breaks the coupling
+  // with every other guard still green.
+  const palette = realTheme().palette;
+  const secondary = palette.secondary;
+  assert.ok(secondary && typeof secondary.main === 'string',
+    'the resolved theme has no palette.secondary -- this guard would be vacuous');
+
+  const FIELDS = ['main', 'light', 'dark', 'contrastText'];
+  for (const field of FIELDS) {
+    assert.equal(secondary[field], SECONDARY[field],
+      `theme.palette.secondary.${field} is ${JSON.stringify(secondary[field])}, ` +
+      `but the token the aliases shadow is ${JSON.stringify(SECONDARY[field])}. ` +
+      'The aliases would silently shadow a colour the theme no longer holds; ' +
+      'fix by deriving one from the other, not by re-copying the literal.');
+  }
+});
+
+test('the coupling guard reads the shipped theme, not a copy', () => {
+  // Precondition for the guard above: pin the load path, so a future refactor
+  // cannot quietly point it at a hand-typed subset and restore the unfailable
+  // property it was written to remove.
+  const { THEME_PATH } = require('../helpers/ui-real-theme');
+  assert.ok(THEME_PATH.endsWith('src/ui/src/styles/theme.js'),
+    `the coupling guard must read the shipped theme, got ${THEME_PATH}`);
+});
+
+test('the secondary ramp is declared in ONE place, not two', () => {
+  // The guard above is a VALUE guard, and on its own it is close to
+  // tautological: theme.js now imports SECONDARY, so the resolved palette is
+  // derived from the very object the guard compares it against. A future
+  // editor could re-introduce a hand-copy in theme.js holding the SAME three
+  // hexes and this guard would still pass -- the copy would agree with the
+  // original until the day someone re-hues one side.
+  //
+  // So this guard asserts the STRUCTURAL property that makes the drift
+  // impossible rather than merely detectable: the ramp's hexes exist in
+  // exactly one source file. Two declarations of one ramp is the defect
+  // itself, whatever values they currently hold.
+  //
+  // The hex set is DERIVED from the token rather than hard-coded, so a
+  // deliberate re-hue of SECONDARY does not require editing this test: the
+  // guard asks "is the ramp's CURRENT value declared more than once?", which
+  // is the invariant. Hard-coding the hexes here would have made a legitimate
+  // re-hue fail the suite for no reason.
+  //
+  // Comments are stripped first: both files DOCUMENT these hexes in prose,
+  // and a quoted hex in an explanatory comment is not a second declaration.
+  const RAMP_HEXES = Object.values(SECONDARY).filter((v) => /^#[0-9a-f]{6}$/i.test(v));
+  assert.ok(RAMP_HEXES.length >= 3,
+    `expected the ramp's hex steps to be derivable from SECONDARY, got ` +
+    `${JSON.stringify(RAMP_HEXES)}; this guard would be checking nothing`);
+  const ALIAS_MODULE = path.join('styles', 'domainAliases.js');
+
+  const jsFiles = (dir) => fs.readdirSync(dir, { withFileTypes: true })
+    .flatMap((e) => {
+      const full = path.join(dir, e.name);
+      if (e.isDirectory()) return jsFiles(full);
+      return e.name.endsWith('.js') ? [full] : [];
+    });
+
+  const declarations = new Map(RAMP_HEXES.map((h) => [h, []]));
+  for (const file of jsFiles(UI_SRC)) {
+    const src = fs.readFileSync(file, 'utf8')
+      .replace(/\/\*[\s\S]*?\*\//g, ' ')
+      .replace(/(^|[^:])\/\/[^\n]*/g, '$1');
+    for (const hex of RAMP_HEXES) {
+      if (src.includes(hex)) {
+        declarations.get(hex).push(path.relative(UI_SRC, file));
+      }
+    }
+  }
+
+  for (const hex of RAMP_HEXES) {
+    const files = declarations.get(hex);
+    assert.deepEqual(files, [ALIAS_MODULE],
+      `the secondary ramp hex ${hex} is declared in ${files.length} place(s): ` +
+      `${files.join(', ')}. The ramp must be declared in exactly one file ` +
+      `(${ALIAS_MODULE}); a second declaration is a hand-copy that can drift ` +
+      'away from the token the domain aliases shadow.');
   }
 });
 

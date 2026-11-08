@@ -3,6 +3,7 @@ const cors = require('cors');
 const helmet = require('helmet');
 const path = require('path');
 const fs = require('fs');
+const { normalizeAnomalies, countBySeverity } = require('./monitoring/severity-contract');
 
 const app = express();
 const PORT = process.env.PORT || 8080;
@@ -210,12 +211,20 @@ const complianceFrameworks = [
 ];
 
 // Anomaly data
+//
+// Severity is the canonical 4-level enum from
+// src/monitoring/severity-contract.js, matching the detector's z-score
+// ladder (the real producer). These literals previously used a lowercase
+// 3-level vocabulary ('high'|'medium'|'low') that no consumer understood --
+// see card t_517be819 / t_775073b4. normalizeAnomalies() is applied below so
+// the stored values can never drift from the enum, even if a literal is
+// edited later.
 const anomalies = [
   {
     id: 'anom-001',
     agentId: 'agent:writer:live-004',
     type: 'behavioral_deviation',
-    severity: 'high',
+    severity: 'HIGH',
     description: 'Agent Designer accessed unauthorized tool endpoints outside clearance scope',
     detectedAt: '2026-05-20T09:10:00Z',
     acknowledged: false,
@@ -226,7 +235,7 @@ const anomalies = [
     id: 'anom-002',
     agentId: 'agent:coder:live-002',
     type: 'token_spike',
-    severity: 'medium',
+    severity: 'MEDIUM',
     description: 'Coder token consumption 3.2x above baseline for code_write operations',
     detectedAt: '2026-05-22T14:30:00Z',
     acknowledged: true,
@@ -237,14 +246,43 @@ const anomalies = [
     id: 'anom-003',
     agentId: 'agent:researcher:live-001',
     type: 'latency_anomaly',
-    severity: 'low',
+    severity: 'LOW',
     description: 'Researcher research queries showing 2.1x latency increase vs baseline',
     detectedAt: '2026-05-22T16:00:00Z',
     acknowledged: false,
     baseline: { avgLatency: 1200, errorRate: 0.01 },
     actual: { avgLatency: 2520, errorRate: 0.02 },
   },
+  {
+    // CRITICAL is the only seed at the top of the ladder, and it is
+    // deliberately UNACKNOWLEDGED. The canonical enum has 4 levels but the
+    // original seed covered only 3, which left the CRITICAL branch of both
+    // /api/anomalies/stats and /api/dashboard/summary completely unexercised:
+    // a broken `severity === 'CRITICAL'` predicate there still reported 0 and
+    // still satisfied a test that compared it against a recomputed 0. Seed
+    // data exists to be exercised -- this record is what makes the top level
+    // testable. (Card t_517be819.)
+    id: 'anom-004',
+    agentId: 'agent:writer:live-004',
+    type: 'security_violation',
+    severity: 'CRITICAL',
+    description: 'Writer agent attempted to escalate clearance outside its authorisation scope',
+    detectedAt: '2026-05-23T08:41:00Z',
+    acknowledged: false,
+    baseline: { unauthorizedCalls: 0, errorRate: 0.01 },
+    actual: { unauthorizedCalls: 9, errorRate: 0.44 },
+  },
 ];
+
+// Normalise the seed data through the canonical contract at load time. The
+// literals above are already canonical, so this is a no-op today -- it exists
+// so that a future edit reintroducing 'high' or 'warning' is coerced at the
+// boundary instead of silently reaching a consumer that cannot read it (the
+// exact failure mode of card t_517be819). Mutated in place because every
+// route below closes over this array.
+for (const anomaly of anomalies) {
+  anomaly.severity = normalizeAnomalies([anomaly])[0].severity;
+}
 
 // Audit trail data
 const auditTrail = [
@@ -419,16 +457,23 @@ app.post('/api/agents/:agentId/restore', (req, res) => {
 // --- Anomalies ---
 // NOTE: /stats MUST come before /:id or it gets caught by the wildcard
 app.get('/api/anomalies/stats', (req, res) => {
+  // Keys are the canonical enum (card t_517be819). `critical` previously
+  // counted severity === 'high' AND unacknowledged, which conflated the
+  // top level with the second level and with ack state; it now means
+  // exactly "CRITICAL, still unacknowledged", and the full per-level
+  // breakdown is exposed under the same shape the UI counts.
+  const counts = countBySeverity(anomalies);
   res.json({
-    critical: anomalies.filter(a => a.severity === 'high' && !a.acknowledged).length,
-    total: anomalies.length,
+    critical: anomalies.filter(a => a.severity === 'CRITICAL' && !a.acknowledged).length,
+    total: counts.total,
     bySeverity: {
-      high: anomalies.filter(a => a.severity === 'high').length,
-      medium: anomalies.filter(a => a.severity === 'medium').length,
-      low: anomalies.filter(a => a.severity === 'low').length,
+      CRITICAL: counts.CRITICAL,
+      HIGH: counts.HIGH,
+      MEDIUM: counts.MEDIUM,
+      LOW: counts.LOW,
     },
-    acknowledged: anomalies.filter(a => a.acknowledged).length,
-    unacknowledged: anomalies.filter(a => !a.acknowledged).length,
+    acknowledged: counts.acknowledged,
+    unacknowledged: counts.total - counts.acknowledged,
   });
 });
 
@@ -528,7 +573,7 @@ app.get('/api/agents/:agentId/routing', (req, res) => {
 // --- Dashboard Summary ---
 app.get('/api/dashboard/summary', (req, res) => {
   const activeAgents = allAgents.filter(a => a.state === 'active').length;
-  const criticalAlerts = anomalies.filter(a => a.severity === 'high' && !a.acknowledged).length;
+  const criticalAlerts = anomalies.filter(a => a.severity === 'CRITICAL' && !a.acknowledged).length;
   const totalPassing = complianceFrameworks.reduce((sum, f) => sum + f.controlsPassing, 0);
   const totalControls = complianceFrameworks.reduce((sum, f) => sum + f.controlsTotal, 0);
   const enforcedLevel = 'T2+';
@@ -545,8 +590,11 @@ app.get('/api/dashboard/summary', (req, res) => {
 // ============================================================
 // Start Server
 // ============================================================
-app.listen(PORT, () => {
-  console.log(`
+// Only auto-listen when run directly (`node src/server.js`). Tests require this
+// module and bind to an ephemeral port themselves (card t_517be819).
+if (require.main === module) {
+  app.listen(PORT, () => {
+    console.log(`
 ╔══════════════════════════════════════════════════════════╗
 ║  AWARE API Server — Security Control Plane              ║
 ║  Listening on port ${PORT}                                ║
@@ -559,4 +607,7 @@ app.listen(PORT, () => {
 ║  Kill Switch: Raft consensus ready                     ║
 ╚══════════════════════════════════════════════════════════╝
   `);
-});
+  });
+}
+
+module.exports = { app };

@@ -17,14 +17,19 @@ const MetricType = {
 };
 
 /**
- * Severity levels for anomalies
+ * Severity levels for anomalies.
+ *
+ * RE-EXPORTED from src/monitoring/severity-contract.js rather than declared
+ * here: this was one of two independent copies of the same enum (the other
+ * in anomaly-detector.js), which is precisely how the product ended up with
+ * four incompatible severity vocabularies -- card t_517be819. Both call sites
+ * now read one definition, so they cannot drift apart.
  */
-const Severity = {
-  LOW: 'LOW',
-  MEDIUM: 'MEDIUM',
-  HIGH: 'HIGH',
-  CRITICAL: 'CRITICAL'
-};
+const { SEVERITY_LEVELS } = require('./severity-contract');
+const Severity = SEVERITY_LEVELS.reduce((acc, level) => {
+  acc[level] = level;
+  return acc;
+}, Object.create(null));
 
 /**
  * MetricsCollector - collects and stores agent behavioural metrics

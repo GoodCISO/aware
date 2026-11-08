@@ -31,20 +31,28 @@
  * a 4-step single-hue ramp spanning only the luminances that clear 3:1 on
  * paper #132f4c has a fixed lightness budget to divide into 3 gaps.
  *
- * FIGURE PROVENANCE (re-measured 2026-10-12, Pixel audit): the 6.44 was
- * recomputed with the corpus-validated CIEDE2000 shipped in the
- * `colour-metric-validation` skill (Hermes designer profile)
- * (--self-test: reference PASSES all 35 Sharma pairs, the known-broken
- * implementation FAILS 32). It previously read 6.1 here, measured by a script
- * that was never committed, so the number could not be re-derived -- the
- * pitfall `colour-metric-validation` pitfall 2 names. Only the WCAG contrast
- * figures above are pinned by a test; THIS dE00 is comment-only, so it can
- * drift again. Recompute with the skill's harness before citing it.
+ * FIGURE PROVENANCE: 6.44 is MEASURED, not asserted.
+ * test/unit/ui/severity-ramp.test.js recomputes the worst pair's dE00 from
+ * the committed tokens below, using the corpus-validated CIEDE2000 in
+ * test/unit/helpers/ciede2000.js (which is itself checked against the
+ * published Sharma/Wu/Dalal reference corpus on every run), and fails if
+ * either figure quoted above stops matching the measurement. The figure
+ * previously read 6.1 here, measured by a script that was never committed, so
+ * the number could not be re-derived and could not be protected; it now can
+ * be both. Recompute rather than cite if you change these tokens.
  *
- * NOTE: this comment deliberately names the skill, not its path on this
- * machine. This file is bundled into the shipped UI, so an absolute host path
- * here is both a privacy-filter hit (the `aware-host-path-disclosure` rule)
- * and a real disclosure in the client build.
+ * The 6.44 was first re-measured on 2026-10-12 by Pixel using the
+ * corpus-validated CIEDE2000 shipped in the `colour-metric-validation`
+ * skill (Hermes designer profile), whose --self-test PASSES all 35 Sharma
+ * pairs and FAILS the known-broken implementation on 32 of them. The
+ * committed harness in test/unit/helpers/ciede2000.js is that same
+ * reference corpus, so the figure no longer depends on an uncommitted
+ * script.
+ *
+ * NOTE: this comment names the skill, not its path on this machine. This
+ * file is bundled into the shipped UI, so an absolute host path here is
+ * both a privacy-filter hit (the `aware-host-path-disclosure` rule) and a
+ * real disclosure in the client build.
  *
  * Two things follow, and they are why this is not merely a token swap:
  *   1. Colour alone is NOT a sufficient severity signal at the 4th level.

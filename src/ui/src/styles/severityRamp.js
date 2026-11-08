@@ -23,13 +23,28 @@
  * order, not hue.
  *
  * KNOWN LIMIT, stated rather than hidden: the worst PAIR in this ramp is
- * HIGH/MEDIUM at dE00 6.1. The card asked for levels that read as clearly
+ * HIGH/MEDIUM at dE00 6.44. The card asked for levels that read as clearly
  * separate tokens and cited dE00 16.7 as its own bar. That bar is NOT
  * reachable by any single-hue ramp here: an exhaustive search of the AWARE
  * cyan gamut (hue 187, sat 100%, L 80-99) subject to the 3:1 floor and
- * monotonic contrast tops out at dE00 6.1, and the constraint is geometric —
+ * monotonic contrast tops out at dE00 6.44, and the constraint is geometric —
  * a 4-step single-hue ramp spanning only the luminances that clear 3:1 on
  * paper #132f4c has a fixed lightness budget to divide into 3 gaps.
+ *
+ * FIGURE PROVENANCE (re-measured 2026-10-12, Pixel audit): the 6.44 was
+ * recomputed with the corpus-validated CIEDE2000 shipped in the
+ * `colour-metric-validation` skill (Hermes designer profile)
+ * (--self-test: reference PASSES all 35 Sharma pairs, the known-broken
+ * implementation FAILS 32). It previously read 6.1 here, measured by a script
+ * that was never committed, so the number could not be re-derived -- the
+ * pitfall `colour-metric-validation` pitfall 2 names. Only the WCAG contrast
+ * figures above are pinned by a test; THIS dE00 is comment-only, so it can
+ * drift again. Recompute with the skill's harness before citing it.
+ *
+ * NOTE: this comment deliberately names the skill, not its path on this
+ * machine. This file is bundled into the shipped UI, so an absolute host path
+ * here is both a privacy-filter hit (the `aware-host-path-disclosure` rule)
+ * and a real disclosure in the client build.
  *
  * Two things follow, and they are why this is not merely a token swap:
  *   1. Colour alone is NOT a sufficient severity signal at the 4th level.

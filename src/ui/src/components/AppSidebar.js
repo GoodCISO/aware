@@ -67,7 +67,7 @@ const AppSidebar = () => {
                 <ListItemIcon sx={{ color: isActive ? 'primary.main' : 'text.secondary' }}>
                   {item.icon}
                 </ListItemIcon>
-                <ListItemText primary={item.text} primaryTypographyProps={{ fontSize: '0.875rem' }} />
+                <ListItemText primary={item.text} primaryTypographyProps={{ variant: 'body2' }} />
               </ListItemButton>
             </ListItem>
           );

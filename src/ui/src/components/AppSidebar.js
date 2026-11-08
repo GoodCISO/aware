@@ -67,6 +67,17 @@ const AppSidebar = () => {
                 <ListItemIcon sx={{ color: isActive ? 'primary.main' : 'text.secondary' }}>
                   {item.icon}
                 </ListItemIcon>
+                {/* The nav label wants a 14px body, not ListItemText's
+                    default body1 (1rem). Select the scale step via the
+                    framework's own variant rather than overriding fontSize
+                    with a hardcoded 0.875rem, so a theme typography change
+                    moves this label with the rest of the scale.
+
+                    NOT a zero-visual-change: body2 is 14px (same as the old
+                    literal) but its line-height is 1.43, where body1's is
+                    1.5. The label's leading tightens from 21px to 20.02px.
+                    See test/unit/ui/sidebar-typography.test.js, which pins
+                    the resolved values against the REAL theme. */}
                 <ListItemText primary={item.text} primaryTypographyProps={{ variant: 'body2' }} />
               </ListItemButton>
             </ListItem>

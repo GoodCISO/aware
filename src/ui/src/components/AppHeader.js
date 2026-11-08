@@ -11,7 +11,11 @@ const AppHeader = () => {
   const totalAlerts = unreadKillEvents + criticalAnomalies;
 
   return (
-    <AppBar position="static" elevation={0} sx={{ borderBottom: '1px solid rgba(255,255,255,0.1)' }}>
+    <AppBar
+      position="static"
+      elevation={0}
+      sx={{ borderBottom: (theme) => `1px solid ${theme.palette.overlay.dividerStrong}` }}
+    >
       <Toolbar>
         <SecurityIcon sx={{ mr: 2, color: 'primary.main' }} />
         <Typography variant="h6" sx={{ flexGrow: 1, fontWeight: 600 }}>

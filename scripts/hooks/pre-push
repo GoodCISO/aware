@@ -7,8 +7,7 @@
 #
 # Differences from Layer 1 (pre-commit):
 #   - Scans the *full diff* being pushed (not just staged content)
-#   - Runs `gitleaks detect` against the working tree (catches patterns
-#     outside staged content, e.g. files modified but not staged)
+#   - Scans the CONTENT OF THE PUSHED TREE (not the working tree)
 #   - Loops over every ref being pushed (branch + tag)
 #
 # Bypassability: still client-side. `git push --no-verify` skips it.
@@ -34,26 +33,57 @@ if ! command -v gitleaks >/dev/null 2>&1; then
     echo "  (gitleaks not installed — skipping gitleaks scan. Install: brew install gitleaks)"
 fi
 
-# 1) For every ref being pushed, scan the new content being introduced.
-#    We compare <local-sha>..<remote-sha> (or <local-sha> for new refs)
-#    and grep the patch for the A1 content rules.
+# ─────────────────────────────────────────────────────────────────────────
+# v4 — scan the PUSHED TREE, not the working tree.
 #
-#    Bug-fix history:
-#      v1 (in v2.7.2): ran `gitleaks detect --source . --no-git` against the
-#        full working tree, producing false positives on gitignored files
-#        (`.env`, `node_modules/*/README.md`, etc.) that the push would
-#        never carry.
-#      v2 (in v2.7.3 first attempt): piped changed-file paths via stdin to
-#        `gitleaks detect`. This does NOT scope the scan in gitleaks 8.x —
-#        gitleaks treats positional file arguments as advisory and still
-#        scans `--source .` (or `.` by default) recursively. End result:
-#        same 38 false positives in node_modules/*.
-#      v3 (this version): invoke `gitleaks detect --source <file>` once per
-#        changed file. Each call scans exactly that file (no directory
-#        descent), so gitignored content is excluded by construction.
-#        Cost: O(N) gitleaks invocations per ref. For the AWARE repo (a few
-#        dozen changed files per release) this is ~1s total — acceptable.
-echo "    Scanning diffs of pushed refs..."
+# History:
+#   v1 (v2.7.2): ran `gitleaks detect --source . --no-git` against the full
+#     working tree, producing false positives on gitignored files (`.env`,
+#     `node_modules/*/README.md`, etc.) that the push would never carry.
+#   v2 (v2.7.3 first attempt): piped changed-file paths via stdin to
+#     `gitleaks detect`. This does NOT scope the scan in gitleaks 8.x —
+#     gitleaks treats positional file arguments as advisory and still
+#     scans `--source .` (or `.` by default) recursively. End result:
+#     same 38 false positives in node_modules/*.
+#   v3 (v2.7.3): invoke `gitleaks detect --source <file>` once per changed
+#     file. Each call scans exactly that file (no directory descent), so
+#     gitignored content is excluded by construction.
+#   v4 (this version): scan the CONTENT BEING PUSHED.
+#
+# v3's scope was right but its SUBJECT was wrong: it scanned the file on
+# disk, while git pushes the content of the COMMITTED BLOB. That mismatch
+# produced two bugs, both proven by execution (not by inspection):
+#
+#   (a) FALSE PASS (a security hole). If the committed blob contains a
+#       host-path/secret but the working-tree file has since been cleaned,
+#       v3 scanned the clean file and let the secret through. A filter
+#       that passes what it was built to block is worse than no filter,
+#       because it is trusted.
+#   (b) FALSE BLOCK (an availability bug). If the working-tree file contains
+#       a pattern the committed blob does NOT, v3 blocked the push of
+#       unrelated, clean content. This is what stopped the governed token
+#       stack from reaching origin/main on 2026-11-05: an UNCOMMITTED
+#       comment in severityRamp.js blocked a push of the whole token
+#       programme.
+#
+# v4 materialises each changed file's blob from the tree being pushed
+# (`git show <sha>:<path>`) into a temp mirror, and every check below —
+# gitleaks, the docs/STATUS/data rules, and the public-boundary checker —
+# reads THAT. The scan subject is now exactly the bytes git will send to
+# the remote, so uncommitted working-tree state cannot influence the
+# verdict in either direction.
+#
+# The temp mirror preserves each file's repo-relative path, because both
+# gitleaks (path-based allowlists) and the public-boundary checker
+# (marker parsing, basename-based exemptions) key off it.
+# ─────────────────────────────────────────────────────────────────────────
+
+TMP_ROOT="$(mktemp -d)"
+cleanup() { rm -rf "$TMP_ROOT"; }
+trap cleanup EXIT
+
+REF_INDEX=0
+
 while read -r LOCAL_REF LOCAL_SHA REMOTE_REF REMOTE_SHA; do
     # Skip empty lines
     [[ -z "$LOCAL_REF" ]] && continue
@@ -91,30 +121,51 @@ while read -r LOCAL_REF LOCAL_SHA REMOTE_REF REMOTE_SHA; do
         continue
     fi
 
-    # Run gitleaks against only the files being pushed in this ref's diff.
+    # Per-ref temp mirror of the pushed blobs.
+    REF_INDEX=$((REF_INDEX + 1))
+    TMP_DIR="$TMP_ROOT/ref-$REF_INDEX"
+    mkdir -p "$TMP_DIR"
+
+    # ── Materialise the pushed blobs ───────────────────────────────────
+    # Everything scanned from here on is the content that will be pushed.
+    while IFS= read -r f; do
+        [[ -z "$f" ]] && continue
+        # A file deleted in this diff has no blob to scan.
+        if ! git cat-file -e "$LOCAL_SHA:$f" 2>/dev/null; then
+            continue
+        fi
+        TMP_F="$TMP_DIR/$f"
+        mkdir -p "$(dirname "$TMP_F")"
+        if ! git show "$LOCAL_SHA:$f" > "$TMP_F" 2>/dev/null; then
+            echo "    ✗ $f — could not read blob from the pushed tree; treating as a failure."
+            FAILED=1
+            continue
+        fi
+    done <<< "$CHANGED_FILES"
+
+    # ── gitleaks over the pushed content ───────────────────────────────
     # gitleaks 8.x ignores stdin-paths and always scans --source (or `.`)
-    # recursively. Workaround: invoke gitleaks per-file with --source so
-    # the scope is exactly the file we want to check. Gitignored files
-    # never appear in `git diff`, so they're naturally excluded.
+    # recursively. Workaround: scan the per-file blob copy with --source,
+    # so the scope is exactly one file and no directory descent happens.
     #
-    # Use absolute paths for both --source and --config: when scanning
-    # `.gitleaks.toml` itself (its own rules contain the host-path/LAN-IP
-    # regex patterns), a relative-path --source would cause gitleaks to
-    # match its own rule definitions against themselves.
+    # Use an absolute path for --config: when scanning `.gitleaks.toml`
+    # itself (its own rules contain the host-path/LAN-IP regex patterns),
+    # a relative-path --source would cause gitleaks to match its own rule
+    # definitions against themselves.
     if command -v gitleaks >/dev/null 2>&1; then
         FILE_COUNT="$(echo "$CHANGED_FILES" | wc -l | tr -d ' ')"
-        echo "    -> gitleaks detect (per-file, $FILE_COUNT changed file(s))"
+        echo "    -> gitleaks detect (per-file, $FILE_COUNT changed file(s), content from the pushed tree)"
         PER_FILE_FAILED=0
         while IFS= read -r f; do
             [[ -z "$f" ]] && continue
-            [[ ! -f "$f" ]] && continue   # file was deleted in this diff
-            ABS_F="$REPO_ROOT/$f"
+            TMP_F="$TMP_DIR/$f"
+            [[ -f "$TMP_F" ]] || continue   # deleted, or blob read failed above
             if ! gitleaks detect --no-git \
-                    --source "$ABS_F" \
+                    --source "$TMP_F" \
                     --config "$REPO_ROOT/.gitleaks.toml" \
                     --redact --no-banner --exit-code 1 >/dev/null 2>&1; then
                 echo ""
-                echo "✗ pre-push blocked: gitleaks found a pattern in $f."
+                echo "✗ pre-push blocked: gitleaks found a pattern in $f (as committed in $LOCAL_REF)."
                 echo "  See .gitleaks.toml for the rule that fired."
                 PER_FILE_FAILED=1
             fi
@@ -124,18 +175,16 @@ while read -r LOCAL_REF LOCAL_SHA REMOTE_REF REMOTE_SHA; do
         fi
     fi
 
-    # Run the same content checks the pre-commit hook runs, against changed files only.
-    # This mirrors the A1 CI lint jobs.
+    # ── Content rules (mirrors the A1 CI lint jobs) ────────────────────
+    # Run against the pushed blob, not the file on disk.
     while IFS= read -r f; do
         [[ -z "$f" ]] && continue
-        # Only scan files that exist on disk
-        if [[ ! -f "$f" ]]; then
-            continue
-        fi
+        TMP_F="$TMP_DIR/$f"
+        [[ -f "$TMP_F" ]] || continue
 
         # Rule 1: docs/audits/*.md host-path patterns
         if [[ "$f" == docs/audits/*.md ]]; then
-            if grep -E '(/Users/[a-z]+/|\.aws/|\.ssh/|\.kube/|\.docker/|\.gnupg/)' "$f" >/dev/null 2>&1; then
+            if grep -E '(/Users/[a-z]+/|\.aws/|\.ssh/|\.kube/|\.docker/|\.gnupg/)' "$TMP_F" >/dev/null 2>&1; then
                 echo "    ✗ $f — host-path pattern in docs/audits/"
                 FAILED=1
             fi
@@ -143,11 +192,11 @@ while read -r LOCAL_REF LOCAL_SHA REMOTE_REF REMOTE_SHA; do
 
         # Rule 2: STATUS.md LAN IP + secrets paths
         if [[ "$f" == "STATUS.md" ]]; then
-            if grep -E '\b(192\.168\.[0-9]{1,3}\.[0-9]{1,3}|10\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3})\b' "$f" >/dev/null 2>&1; then
+            if grep -E '\b(192\.168\.[0-9]{1,3}\.[0-9]{1,3}|10\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3})\b' "$TMP_F" >/dev/null 2>&1; then
                 echo "    ✗ $f — LAN IP in STATUS.md"
                 FAILED=1
             fi
-            if grep -E '<redacted-credential-path>*\.env|api-keys\.env|credentials\.env' "$f" >/dev/null 2>&1; then
+            if grep -E '<redacted-credential-path>*\.env|api-keys\.env|credentials\.env' "$TMP_F" >/dev/null 2>&1; then
                 echo "    ✗ $f — secrets path in STATUS.md"
                 FAILED=1
             fi
@@ -159,35 +208,43 @@ while read -r LOCAL_REF LOCAL_SHA REMOTE_REF REMOTE_SHA; do
             FAILED=1
         fi
         if [[ "$f" == "src/data/users.json.template" || "$f" == "src/data/agents.json.template" ]]; then
-            if grep -E '"passwordHash"|"credentials"' "$f" >/dev/null 2>&1; then
+            if grep -E '"passwordHash"|"credentials"' "$TMP_F" >/dev/null 2>&1; then
                 echo "    ✗ $f contains passwordHash/credentials fields (should be generated, not committed)"
                 FAILED=1
             fi
         fi
     done <<< "$CHANGED_FILES"
-done
-
-# ── Public-boundary check (operator-internal deploy/recover scripts) ─────
-# Catches scripts that bind to the operator's stack topology, org name, or
-# secrets paths — the class of leak the [date-redacted] audit flagged.
-# Companion to gitleaks (which catches secrets); this catches operator-binding.
-#
-# Run as a single batch over the changed scripts (cheap: <100ms typical).
-# Skipped entirely if no scripts/ files changed in this push.
-PUBLIC_BOUNDARY_CHECK="$REPO_ROOT/scripts/check-public-boundary.mjs"
-SCRIPTS_CHANGED="$(echo "$CHANGED_FILES" | grep -E '^scripts/' || true)"
-if [[ -n "$SCRIPTS_CHANGED" && -f "$PUBLIC_BOUNDARY_CHECK" ]]; then
-    echo ""
-    echo "==> [Layer 2/3] public-boundary check on changed scripts/"
-    # Pass each changed script as a positional arg; the checker only verifies
-    # files that exist on disk, so deletions are naturally ignored.
-    if ! node "$PUBLIC_BOUNDARY_CHECK" $SCRIPTS_CHANGED; then
+    # ── Public-boundary check (operator-internal deploy/recover scripts) ──
+    # Catches scripts that bind to the operator's stack topology, org name, or
+    # secrets paths — the class of leak the [date-redacted] audit flagged.
+    # Companion to gitleaks (which catches secrets); this catches operator-binding.
+    #
+    # v4: the paths handed to the checker are the MATERIALISED BLOBS from the
+    # pushed tree, not the files on disk. `--root "$TMP_DIR"` makes the
+    # checker report repo-relative paths (the temp mirror preserves the
+    # repo-relative layout), so the output still reads as a repo path list.
+    PUBLIC_BOUNDARY_CHECK="$REPO_ROOT/scripts/check-public-boundary.mjs"
+    # Use an ARRAY, not a space-joined string: repo paths can contain spaces,
+    # and an unquoted expansion would word-split them into separate args.
+    SCRIPT_BLOBS_IN_REF=()
+    while IFS= read -r f; do
+        [[ -z "$f" ]] && continue
+        case "$f" in
+            scripts/*) SCRIPT_BLOBS_IN_REF+=("$TMP_DIR/$f") ;;
+        esac
+    done <<< "$CHANGED_FILES"
+    if [[ ${#SCRIPT_BLOBS_IN_REF[@]} -gt 0 && -f "$PUBLIC_BOUNDARY_CHECK" ]]; then
         echo ""
-        echo "✗ pre-push blocked: public-boundary violations in scripts/."
-        echo "  See scripts/check-public-boundary.mjs and scripts/AGENTS.md."
-        FAILED=1
+        echo "==> [Layer 2/3] public-boundary check on changed scripts/ ($LOCAL_REF)"
+        # The checker only verifies files that exist, so deletions are ignored.
+        if ! node "$PUBLIC_BOUNDARY_CHECK" --root "$TMP_DIR" "${SCRIPT_BLOBS_IN_REF[@]}"; then
+            echo ""
+            echo "✗ pre-push blocked: public-boundary violations in scripts/ ($LOCAL_REF)."
+            echo "  See scripts/check-public-boundary.mjs and scripts/AGENTS.md."
+            FAILED=1
+        fi
     fi
-fi
+done
 
 if [[ $FAILED -eq 1 ]]; then
     echo ""

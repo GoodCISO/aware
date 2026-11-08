@@ -65,6 +65,26 @@ source files each mapping corresponds to. The IDs are the upstream MCP Top 10
 | `credential-classifier` | `MCP01` | `src/policies/credential-classifier.js` | scans every tool-output payload for known credential patterns (APTS-MR-019); the only MCP01 surface wired today |
 | `pheromone-specialists` | — | — | Heuristic-only per ADR-043 §1; no `OWASP_MCP_TOP_10` row, consistent with the AST10 mapping exclusion |
 
+## Per-control catalog cross-walk
+
+MCP ID, risk class, and severity exactly as pinned in
+`src/compliance/mcp-top10-catalog.js` (source of truth per ADR-051). Severities are
+the upstream MCP Top 10 (2025) risk-class strings; the per-control narratives below
+are the AWARE coverage notes.
+
+| MCP ID | Risk class | Severity |
+|---|---|---|
+| `MCP01` | Token Mismanagement & Secret Exposure | Critical |
+| `MCP02` | Tool / Function Misuse | High |
+| `MCP03` | Excessive Agency & Privilege | High |
+| `MCP04` | Indirect Prompt Injection | Critical |
+| `MCP05` | Command Injection & Execution | High |
+| `MCP06` | Context Window & Memory Poisoning | High |
+| `MCP07` | Supply Chain (Servers / Plugins) | High |
+| `MCP08` | Authentication & Identity | High |
+| `MCP09` | Shadow MCP Servers | Medium |
+| `MCP10` | Untrusted / Cross-Session Context | Medium |
+
 ## Per-risk coverage notes
 
 The 10 MCP risk classes, with the AWARE component(s) that cover each. The

@@ -31,6 +31,7 @@ All notable changes to AWARE Evolution are documented here.
 - **OWASP LLM Top 10:2025** (ADR-050) — rebind from v1.1 to 2025; LLM07 system-prompt-elicit rule; LLM09 review-loop event; LLM10 projection tightened to gate on outcome.success=false; DonkAI replay harness; SARIF surface-routing plumbing for LLM07/LLM09/LLM10.
 - **OWASP AST10** (ADR-048) — close remaining 3 AST10 gaps (AST01, AST06, AST08) with Rules 8/9/10 in `src/compliance/ast10-mapper.js`; new `src/compliance/ast10-catalog.js` + `src/compliance/skill-scanner.js` (vendor-neutral, NVIDIA SkillSpector default, Cisco compatible); `src/policies/sandbox-decision-emitter.js`.
 - **MCP adapter** (ADR-051) — coordinator JSON-RPC adapter + `mcp_message` emitter.
+- framework-mapper.js: register OWASP_MCP_TOP_10 framework block + per-component mappings per ADR-051 §2.2.
 - **VaaraAuditBackend** — opt-in shadow-mode audit backend for the AWARE decision chain; `src/coordinator/adapters/vaara.js` + 1k-fixture integration tests.
 - **Independent stdlib chain verifier** — decoupled verifier with 1k fixture.
 - **ATLAS mapper** — wire ATLAS v2026.06 catalogue + mapper into the consumer tree; 22-case test suite for `atlas-mapper` (all 7 rules).

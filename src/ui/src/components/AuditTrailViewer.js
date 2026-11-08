@@ -37,7 +37,11 @@ const AuditTrailViewer = ({ decisions = [], routingLogs = {} }) => {
     switch (type) {
       case 'request': return 'primary';
       case 'response': return 'info';
-      case 'decision': return 'secondary';
+      // `decision` is a NOMINAL peer of request/response here, not an
+      // ordinal rank, so it gets its own alias rather than borrowing the
+      // token that means "T3 of the constraint ladder" (palette.constraintT3).
+      // Sharing one token is what conflated a categorical choice with a rank.
+      case 'decision': return 'auditDecision';
       default: return 'grey';
     }
   };

@@ -89,8 +89,8 @@ const DashboardContainer = () => {
             title="Constraints Enforced"
             value="T2+"
             subtitle="Guardrailed and above"
-            icon={<GavelIcon color="secondary" />}
-            color="secondary"
+            icon={<GavelIcon color="metricValue" />}
+            color="metricValue"
           />
         </Grid>
       </Grid>

@@ -4,11 +4,11 @@ import SecurityIcon from '@mui/icons-material/Security';
 import WarningIcon from '@mui/icons-material/Warning';
 
 const CONSTRAINT_LEVELS = [
-  { id: 'T0', name: 'Unconstrained', desc: 'Full autonomy — no restrictions', color: 'default' },
-  { id: 'T1', name: 'Advisory', desc: 'Recommendations only — agent chooses', color: 'info' },
-  { id: 'T2', name: 'Supervised', desc: 'Human approval required for critical actions', color: 'warning' },
-  { id: 'T3', name: 'Guardrailed', desc: 'Hard limits on scope and capability', color: 'secondary' },
-  { id: 'T4', name: 'Prohibited', desc: 'No execution — read-only observation', color: 'error' },
+  { id: 'T0', name: 'Audit Trail',     desc: "Every action is logged — foundational, always on", color: 'info' },
+  { id: 'T1', name: 'Crypto Identity', desc: "Every agent gets a non-human identity it can't fake — foundational, always on", color: 'info' },
+  { id: 'T2', name: 'Guardrailed',     desc: 'Operational policies constrain what the agent can do', color: 'warning' },
+  { id: 'T3', name: 'Policy-Driven',   desc: 'Advanced governance — rate limits, decision routing', color: 'constraintT3' },
+  { id: 'T4', name: 'Autonomous',      desc: 'Full self-operation under declared constraints', color: 'success' },
 ];
 
 const ConstraintEnforcementView = ({ constraints = [], agents = [] }) => {
@@ -38,8 +38,20 @@ const ConstraintEnforcementView = ({ constraints = [], agents = [] }) => {
         {CONSTRAINT_LEVELS.map((level) => {
           const count = getAgentCount(level.id);
           const rate = getEnforcementRate(level.id);
+          // Theme colours go in as a theme() callback, NOT a
+          // `var(--mui-palette-<key>-main)` string. That CSS-variable form only
+          // resolves under MUI's CssVarsProvider / extendTheme, and this app
+          // uses a plain createTheme + ThemeProvider (src/index.js) — no CSS
+          // custom properties are ever emitted. Every one of these five
+          // borders has therefore been rendering at the Card default, so the
+          // tier colour was carried by nothing. A callback fails loud; a string
+          // in a dead variable fails silent.
           return (
-            <Card key={level.id} variant="outlined" sx={{ borderColor: `var(--mui-palette-${level.color}-main)` }}>
+            <Card
+              key={level.id}
+              variant="outlined"
+              sx={(theme) => ({ borderColor: theme.palette[level.color]?.main })}
+            >
               <CardContent>
                 <Box display="flex" justifyContent="space-between" alignItems="center" mb={1}>
                   <Chip label={level.id} color={level.color} size="small" />

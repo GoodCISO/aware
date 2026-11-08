@@ -51,6 +51,13 @@
 //   node scripts/check-public-boundary.mjs path/to/file     # check one file
 //   node scripts/check-public-boundary.mjs --changed        # check files changed in last commit
 //   node scripts/check-public-boundary.mjs --json           # machine-readable output
+//   node scripts/check-public-boundary.mjs --root <dir> <file>...
+//                                                      # scan files that live OUTSIDE the
+//                                                      # repo tree (e.g. blobs the
+//                                                      # pre-push hook materialised from
+//                                                      # the tree being pushed) while
+//                                                      # still reporting repo-relative
+//                                                      # paths.
 //
 // Exit codes:
 //   0 — all files clean (no marker needed, marker present, or explicit allow)
@@ -231,6 +238,20 @@ function main() {
   const args = process.argv.slice(2);
   const json = args.includes("--json");
   const changed = args.includes("--changed");
+  // --root <dir>: the repo root that paths should be reported relative to.
+  // The pre-push hook uses this to scan blobs it materialised OUTSIDE the
+  // repo tree (in a temp dir) while still printing repo-relative paths.
+  let root = REPO_ROOT;
+  const rootIdx = args.indexOf("--root");
+  if (rootIdx !== -1) {
+    const r = args[rootIdx + 1];
+    if (!r) {
+      console.error("✗ --root requires a directory argument");
+      process.exit(3);
+    }
+    root = r;
+    args.splice(rootIdx, 2);
+  }
   const positional = args.filter(a => !a.startsWith("--"));
   let targets;
   if (positional.length > 0) {
@@ -263,7 +284,7 @@ function main() {
     const scan = scanFile(t);
     const v = verdict(scan, basename(t));
     if (v.code && v.code > worstCode) worstCode = v.code;
-    results.push({ file: relative(REPO_ROOT, t), ...v, hits: v.hits || scan.hits });
+    results.push({ file: relative(root, t), ...v, hits: v.hits || scan.hits });
   }
   if (json) {
     process.stdout.write(JSON.stringify({ results, worstCode }, null, 2) + "\n");

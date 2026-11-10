@@ -74,12 +74,12 @@ test('classify flags a credential in top-level tool parameters', () => {
   );
 });
 
-test('classify does NOT flag a credential nested below the top level', () => {
-  // Documents a real limitation of the credential rule: it inspects only
-  // the top level of action.parameters (it iterates Object.entries). A
-  // credential inside parameters.headers is not detected. This is a
-  // coverage gap, not a design decision — the test exists so the gap
-  // stays visible rather than being assumed away.
+test('classify flags a credential nested below the top level', () => {
+  // 2026-11-10 (scribe): the credential rule previously inspected only
+  // the top level of action.parameters, so the common shape
+  // parameters.headers.authorization was NOT detected. The rule now
+  // walks nested objects and arrays (depth-bounded to 6, node-bounded
+  // to 200). This test pins the fixed behaviour.
   const mapper = createMCP10Classifier({ enableWrites: false });
   const anns = classify(mapper, {
     decisionId: 'd-nested',
@@ -91,8 +91,76 @@ test('classify does NOT flag a credential nested below the top level', () => {
     context: { sessionId: 's1' },
   });
   assert.ok(
+    anns.some((a) => a.classes.includes('MCP01')),
+    'nested credentials must be detected'
+  );
+});
+
+test('the credential rule reports the path of a nested credential', () => {
+  const mapper = createMCP10Classifier({ enableWrites: false });
+  const anns = classify(mapper, {
+    decisionId: 'd-path',
+    action: {
+      type: 'tool_dispatch',
+      toolId: 'http_fetch',
+      parameters: { headers: { authorization: 'Bearer sk-liv...f456' } },
+    },
+    context: { sessionId: 's1' },
+  });
+  const ann = anns.find((a) => a.classes.includes('MCP01'));
+  assert.ok(ann, 'expected an MCP01 annotation');
+  assert.deepStrictEqual(
+    ann.evidence.secretishKeys,
+    ['headers.authorization'],
+    'the annotation must name the nested path, not just the leaf key'
+  );
+});
+
+test('the credential rule walks arrays', () => {
+  const mapper = createMCP10Classifier({ enableWrites: false });
+  const anns = classify(mapper, {
+    decisionId: 'd-array',
+    action: {
+      type: 'tool_dispatch',
+      toolId: 'http_fetch',
+      parameters: { creds: [{ api_key: 'sk-liv...3456' }] },
+    },
+    context: { sessionId: 's1' },
+  });
+  assert.ok(
+    anns.some((a) => a.classes.includes('MCP01')),
+    'a credential inside an array must be detected'
+  );
+});
+
+test('the credential rule survives a cyclic parameter object', () => {
+  // The walker keeps a visited set; a cyclic object must not hang it.
+  const mapper = createMCP10Classifier({ enableWrites: false });
+  const params = { name: 'x' };
+  params.self = params;
+  const anns = classify(mapper, {
+    decisionId: 'd-cycle',
+    action: { type: 'tool_dispatch', toolId: 'http_fetch', parameters: params },
+    context: { sessionId: 's1' },
+  });
+  assert.ok(Array.isArray(anns), 'must return, not hang');
+});
+
+test('the credential rule ignores short values', () => {
+  // A key named 'token' holding a 3-character string is not a secret.
+  const mapper = createMCP10Classifier({ enableWrites: false });
+  const anns = classify(mapper, {
+    decisionId: 'd-short',
+    action: {
+      type: 'tool_dispatch',
+      toolId: 'http_fetch',
+      parameters: { token: 'abc' },
+    },
+    context: { sessionId: 's1' },
+  });
+  assert.ok(
     !anns.some((a) => a.classes.includes('MCP01')),
-    'nested credentials are currently NOT detected — this test pins that known gap'
+    'short values must not be reported as credentials'
   );
 });
 

@@ -320,6 +320,29 @@ function mountCompliance() {
 mountCompliance();
 app.use('/api/compliance', complianceRouter);
 
+// 2026-11-10 (scribe): start automatic evidence collection.
+//
+// The EvidenceCollector had registerSchedule(), getIntervalMs() and a
+// registerSchedule() call for every default control, but nothing ever
+// started the timer — evidence only appeared when a human POSTed to
+// /api/compliance/evidence/collect. Start it here so the compliance
+// posture reflects the running system rather than the last manual run.
+//
+// Failures here must not stop the gateway booting: the compliance
+// engine is a reporting surface, not the request path.
+try {
+  const { getEvidenceCollector } = require('../compliance/evidence-collector');
+  const collector = getEvidenceCollector();
+  collector.startScheduler();
+  // Collect once at boot so a fresh deployment has evidence without
+  // waiting for the first tick.
+  collector.runDueCollections().catch((err) => {
+    console.error('[gateway] initial evidence collection failed:', err.message);
+  });
+} catch (err) {
+  console.error('[gateway] could not start evidence scheduler:', err.message);
+}
+
 // --- Proxy: passthrough wrap to the coordinator -------------------------
 //
 // The proxy is generic: any path that isn't handled above gets forwarded.

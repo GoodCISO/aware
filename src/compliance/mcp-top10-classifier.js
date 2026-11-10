@@ -65,14 +65,44 @@ const RULES = [
       const params = event?.action?.parameters;
       if (!params || typeof params !== 'object') return null;
       const secretish = [];
-      for (const [key, value] of Object.entries(params)) {
-        if (!/api[_-]?key|secret|token|password|passwd|credential|authorization|bearer|private[_-]?key/i.test(key)) {
-          continue;
+      // 2026-11-10 (scribe): this rule only inspected the TOP LEVEL of
+      // action.parameters, so a credential in a nested object — the
+      // common shape, e.g. parameters.headers.authorization — was not
+      // detected. The rule now walks nested objects and arrays.
+      //
+      // Depth is bounded to 6 and the visited-set is bounded to 200
+      // entries so a cyclic or pathologically large parameter object
+      // cannot hang the classifier.
+      const SECRET_KEY_RE = /api[_-]?key|secret|token|password|passwd|credential|authorization|bearer|private[_-]?key/i;
+      const MAX_DEPTH = 6;
+      const MAX_NODES = 200;
+      const seen = new Set();
+      let nodes = 0;
+
+      const walk = (value, path, depth) => {
+        if (nodes >= MAX_NODES || depth > MAX_DEPTH) return;
+        if (value === null || typeof value !== 'object') return;
+        if (seen.has(value)) return;
+        seen.add(value);
+        nodes++;
+
+        if (Array.isArray(value)) {
+          value.forEach((item, i) => walk(item, `${path}[${i}]`, depth + 1));
+          return;
         }
-        if (typeof value !== 'string') continue;
-        if (value.length < 8) continue;
-        secretish.push({ key, length: value.length });
-      }
+
+        for (const [key, child] of Object.entries(value)) {
+          const childPath = path ? `${path}.${key}` : key;
+          if (SECRET_KEY_RE.test(key) && typeof child === 'string' && child.length >= 8) {
+            secretish.push({ key: childPath, length: child.length });
+            continue;
+          }
+          walk(child, childPath, depth + 1);
+        }
+      };
+
+      walk(params, '', 0);
+
       if (secretish.length === 0) return null;
       return { secretishKeys: secretish.map((s) => s.key), count: secretish.length };
     },

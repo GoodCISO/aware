@@ -32,6 +32,17 @@ router.delete('/agents/:agentId', async (req, res) => {
     });
   }
   
+  // The kill switch is wired to the Raft layer only when this process is part
+  // of a cluster. Report the missing dependency instead of failing later with
+  // an opaque 500 (t_8c8cbf64).
+  if (typeof revocationService.isReady === 'function' && !revocationService.isReady()) {
+    return res.status(503).json({
+      error: 'SERVICE_UNAVAILABLE',
+      message: `Kill switch is not wired to the Raft consensus layer (missing: ${(revocationService.missingDependencies || []).join(', ')})`,
+      missing: revocationService.missingDependencies || []
+    });
+  }
+  
   try {
     const result = await revocationService.initiateRevocation(
       agentId,
@@ -108,6 +119,17 @@ router.post('/agents/:agentId/reinstate', async (req, res) => {
     return res.status(503).json({
       error: 'SERVICE_UNAVAILABLE',
       message: 'Kill switch service not initialized'
+    });
+  }
+  
+  // The kill switch is wired to the Raft layer only when this process is part
+  // of a cluster. Report the missing dependency instead of failing later with
+  // an opaque 500 (t_8c8cbf64).
+  if (typeof revocationService.isReady === 'function' && !revocationService.isReady()) {
+    return res.status(503).json({
+      error: 'SERVICE_UNAVAILABLE',
+      message: `Kill switch is not wired to the Raft consensus layer (missing: ${(revocationService.missingDependencies || []).join(', ')})`,
+      missing: revocationService.missingDependencies || []
     });
   }
   

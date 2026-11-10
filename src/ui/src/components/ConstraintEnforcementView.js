@@ -40,9 +40,10 @@ const ConstraintEnforcementView = ({ constraints = [], agents = [] }) => {
           const count = getAgentCount(level.id);
           const rate = getEnforcementRate(level.id);
           // Theme colours are resolved through the REAL theme object, NOT
-          // through a `var(--mui-palette-<key>-main)` string. That CSS-variable
-          // form only resolves under MUI's CssVarsProvider / extendTheme, and
-          // this app uses a plain createTheme + ThemeProvider (src/index.js)
+          // through a `--mui-palette-<key>-main` CSS custom property. That
+          // variable form only resolves under MUI's CssVarsProvider /
+          // extendTheme, and this app uses a plain createTheme + ThemeProvider
+          // (src/index.js)
           // -- no CSS custom properties are ever emitted. Every one of these
           // five borders was therefore rendering at the Card default, so the
           // tier colour was carried by nothing. A callback fails loud; a

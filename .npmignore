@@ -1,5 +1,18 @@
 # AWARE .npmignore
 # Created 2026-08-02 per Alvin directive (msg 2116): exclude React UI deps from npm tarball.
+#
+# Updated 2026-11-10 (scribe): defence in depth for the npm public-boundary
+# leak. `npm publish` had been run from the repository working tree rather
+# than from a clean checkout of the release tag, so npm packed 27 files that
+# were neither committed nor tagged — including the investor pitch deck, the
+# pitch PDF/HTML, and a stray src/coordinator/http-server.js.bak. The
+# package.json "files" whitelist is now an explicit enumeration of docs/
+# subdirectories; the rules below are the second lock on the same door.
+#
+# NOTE: .npmignore only applies to files that are NOT in the package.json
+# "files" whitelist. The whitelist is the primary control. This file is the
+# belt to that suspenders. The durable control is scripts/publish-guard.mjs,
+# which refuses to publish a tarball that does not match the tag.
 
 # React UI dependencies (huge — 88 MB / 77k files if not excluded)
 src/ui/node_modules/
@@ -9,3 +22,20 @@ src/ui/.cache/
 # Generated seed data (defense in depth — also fixed in .gitignore)
 /src/data/users.json
 /src/data/agents.json
+
+# Internal / non-publishable document trees.
+# docs/ is enumerated in package.json "files"; these are belt-and-suspenders
+# so a future edit that re-adds a broad "docs/" entry cannot re-open the leak.
+docs/investor/
+docs/research/
+docs/design/
+docs/private/
+
+# Editor / backup / scratch artefacts that must never ship.
+*.bak
+*.orig
+*.rej
+*.tmp
+*.swp
+*~
+.DS_Store

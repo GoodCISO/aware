@@ -2,6 +2,33 @@
 
 All notable changes to AWARE Evolution are documented here.
 
+## [2.12.1] — 2026-11-10 — npm public-boundary leak closed; MCP Top 10 coverage completed to 10/10
+
+**Release type:** patch. No runtime behaviour change for a correctly deployed stack. This release repairs the **npm publication channel**, which shipped 27 files that no release had reviewed, and corrects an overstated coverage claim.
+
+### Fixed
+
+- **The npm tarball shipped 27 files that were never committed or tagged.** `npm publish` had been run from the repository working tree rather than from a clean checkout of the release tag. npm packs the working tree, so untracked and unstaged files were published to the public registry alongside the release. The published `@goodciso/aware@2.12.0` tarball contained 212 files; the `v2.12.0` tag contains 185 publishable files. The 27 extra files included `docs/investor/AI-SEED-FUND-PITCH.md`, `docs/investor/AWARE-Pitch-Deck.pptx`, `docs/investor/aware-pitch-deck.pdf`, `docs/investor/aware-pitch-deck.html`, `docs/investor/CSA-AGM-2026-SPEAKER-SUBMISSION.md`, `src/coordinator/http-server.js.bak`, `src/compliance/mcp-governance-catalog.js`, `src/trainer/security-sensitive-diff.js`, and 19 more. **No credential was in any of them** — a secret scan against the published tarball returned zero matches for API keys, bearer tokens, private keys, cloud keys, or connection strings. The defect is not a secret leak; it is that npm published a tree that no release had ever reviewed, which breaks the tag-as-source-of-truth guarantee. The GitHub release tarball for the same tag was clean (425 files, tag-based) — only the npm channel was affected.
+- **`package.json` shipped every `docs/` subdirectory.** The `files` whitelist contained `"docs/"`, which expands to any subdirectory present in the working tree at pack time — including `docs/investor/`, `docs/research/` and `docs/design/`. The whitelist is now an explicit enumeration of the publishable document tree (`docs/adr/`, `docs/compliance/`, `docs/security/`, `docs/config.md`, `docs/openapi.yaml`, `docs/rlm.md`), so a future document directory cannot be published by accident.
+- **The MCP Top 10 coverage claim was overstated.** The v2.12.0 release notes said "8 rules covering 8 of the 10 OWASP MCP Top 10 classes" and named MCP06 and MCP07 as uncovered — but MCP08 was uncovered too, and was not mentioned. Three classes in the catalogue (`MCP06` Context Window & Memory Poisoning, `MCP07` Supply Chain, `MCP08` Authentication & Identity) had no rule, so no annotation for them could ever be produced.
+
+### Added
+
+- **`scripts/publish-guard.mjs`** — the durable control that prevents recurrence. It builds a clean detached worktree at the release tag, packs from *there*, and refuses to publish if any packed file is absent from the tag or differs from it byte-for-byte. The `--audit-worktree` mode reproduces the original mistake as a dry run and reports exactly which untagged files a working-tree publish would ship. Verified against `v2.12.0`: it lists the offending files and exits 1.
+- **Three MCP Top 10 classifier rules** closing the coverage gap — `unprovenanced-context-write` (MCP06: a write into working memory with no provenance field), `unpinned-plugin-install` (MCP07: an MCP server or plugin installed with no content-hash, digest or publisher-key pin), and `unbound-audience-credential` (MCP08: a credential presented without an audience binding, so it is replayable across servers). Each rule fires only on the failure shape and stays silent when the corresponding control is working.
+- **A coverage test that pins the gap closed.** `every catalogue class is reachable from at least one rule` fails if any of the ten OWASP MCP Top 10 classes ever becomes unreachable from the rule table again.
+
+### Changed
+
+- `.npmignore` gained the second lock on the same door: `docs/investor/`, `docs/research/`, `docs/design/`, `docs/private/`, and the `*.bak` / `*.orig` / `*.swp` family. The `files` whitelist remains the primary control; `.npmignore` is defence in depth.
+
+### Notes
+
+- **Version 2.12.0 on npm is withdrawn.** The leaked 2.12.0 was published at 2026-11-10T18:39:01Z and is being unpublished in favour of 2.12.1, whose tarball matches the tag exactly. Anyone who installed `@goodciso/aware@2.12.0` should move to 2.12.1; the runtime code in the two releases is identical apart from the publish guard and the three classifier rules.
+- The MCP classifier suite is now **26 tests, all passing** (up from 14).
+- No runtime or API change. A correctly deployed stack behaves identically on 2.12.0 and 2.12.1.
+- Not included in this release, and not published: `src/compliance/mcp-governance-catalog.js`, `src/trainer/security-sensitive-diff.js`, `docs/investor/`, `docs/research/`, `docs/design/` and their tests — untracked work that is deliberately excluded from every release.
+
 ## [2.12.0] — 2026-11-10 — Compliance engine becomes persistent and auditable; MCP Top 10 classifier shipped; provider model made configurable
 
 **Release type:** minor. New capability (MCP Top 10 classification, durable compliance state, failure-path auditing) plus four defect fixes that each disabled a documented control.

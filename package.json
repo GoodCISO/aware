@@ -1,6 +1,6 @@
 {
   "name": "@goodciso/aware",
-  "version": "2.12.0",
+  "version": "2.12.1",
   "description": "AWARE - Autonomous Compliance Infrastructure for AI Agents",
   "repository": {
     "type": "git",
@@ -39,7 +39,12 @@
     "src/v2/",
     "scripts/seed-dev-users.js",
     "scripts/seed-dev-agents.js",
-    "docs/",
+    "docs/adr/",
+    "docs/compliance/",
+    "docs/security/",
+    "docs/config.md",
+    "docs/openapi.yaml",
+    "docs/rlm.md",
     "LICENSE",
     "README.md",
     "CHANGELOG.md",
@@ -67,7 +72,9 @@
     "ui-build": "cd src/ui && npm run build",
     "ui-install": "cd src/ui && npm install",
     "config:show": "node -e \"const c = require('./src/config/index.cjs'); console.log(JSON.stringify(c.snapshot(), null, 2))\"",
-    "config:validate": "node -e \"const c = require('./src/config/index.cjs'); try { c.validate(); console.log('OK'); } catch (e) { console.error('FAIL:', e.message); process.exit(1); }\""
+    "config:validate": "node -e \"const c = require('./src/config/index.cjs'); try { c.validate(); console.log('OK'); } catch (e) { console.error('FAIL:', e.message); process.exit(1); }\"",
+    "publish:guard": "node scripts/publish-guard.mjs",
+    "prepublishOnly": "node scripts/publish-guard.mjs --tag v$(node -p \"require('./package.json').version\") --audit-worktree"
   },
   "keywords": [
     "cluster",

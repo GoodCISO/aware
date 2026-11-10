@@ -21,6 +21,14 @@
 // what it saw, so an annotation can be justified or challenged by a
 // reviewer without re-running the classifier.
 //
+// 2026-11-10 (scribe, second pass): the first release shipped 8 rules
+// covering 8 of the 10 classes — MCP06, MCP07 and MCP08 had catalogue
+// entries but no rule, so those three classes could never be annotated
+// and the coverage claim in the CHANGELOG was overstated. Three rules
+// were added (`unprovenanced-context-write`, `unpinned-plugin-install`,
+// `unbound-audience-credential`) to close the gap. All ten classes are
+// now reachable from a single decision record.
+//
 // Per ADR-051, annotations ride on the decision chain as records with
 // action.type === 'mcp10_annotation' and a child `annotation` field.
 
@@ -248,6 +256,182 @@ const RULES = [
       }
       // A write against a remote host is the scope-creep shape.
       return { toolId, target, hostname, remote: true };
+    },
+  },
+  {
+    // 2026-11-10 (scribe): MCP06 (Context Window & Memory Poisoning) had
+    // a catalogue entry but no rule, so the class could never be annotated
+    // from a decision record. The event-only shape that IS detectable is a
+    // write into persistent working memory whose payload carries no
+    // provenance — i.e. the content is adopted as a fact about the agent's
+    // own context rather than as data it read. A `context_write` /
+    // `memory_write` / `context_append` action whose parameters carry
+    // content but no provenance/source/uri field is that shape.
+    id: 'unprovenanced-context-write',
+    classes: ['MCP06'],
+    confidence: 'M',
+    reference: 'MCP06#memory-poisoning',
+    description:
+      'Content is written into the agent\'s working memory without a ' +
+      'provenance field, so a poisoned read can persist across the session.',
+    test(event) {
+      const action = event?.action || {};
+      const type = String(action.type || '');
+      if (!/^(context|memory)[-_](write|append|insert|update|store)$/.test(type)) {
+        return null;
+      }
+      const params = action.parameters || {};
+      const hasContent =
+        typeof params.content === 'string' ||
+        typeof params.text === 'string' ||
+        typeof params.value === 'string' ||
+        typeof params.message === 'string';
+      if (!hasContent) return null;
+      // A provenance field means the writer knew where the content came
+      // from — that is the control working, not the failure shape.
+      const PROVENANCE_KEYS = [
+        'provenance',
+        'source',
+        'sourceUri',
+        'source_uri',
+        'uri',
+        'url',
+        'origin',
+        'originId',
+        'origin_id',
+        'resource',
+        'resourceUri',
+        'retrievedFrom',
+        'retrieved_from',
+      ];
+      const hasProvenance = PROVENANCE_KEYS.some(
+        (k) => params[k] !== undefined && params[k] !== null && params[k] !== ''
+      );
+      if (hasProvenance) return null;
+      return { actionType: type, provenanceAbsent: true };
+    },
+  },
+  {
+    // 2026-11-10 (scribe): MCP07 (Supply Chain — Servers / Plugins) had a
+    // catalogue entry but no rule. The event-only detectable shape is an
+    // install/fetch of an MCP server or plugin that carries no integrity
+    // pin: no version digest, no hash, no publisher-key signature, and no
+    // pinned version. An install action naming a package/server without
+    // those fields is the supply-chain risk shape.
+    id: 'unpinned-plugin-install',
+    classes: ['MCP07'],
+    confidence: 'M',
+    reference: 'MCP07#supply-chain',
+    description:
+      'An MCP server or plugin is installed without a content-hash pin, ' +
+      'version digest, or publisher-key verification.',
+    test(event) {
+      const action = event?.action || {};
+      const type = String(action.type || '');
+      if (!/install|add|register|enable|load/.test(type)) return null;
+      // Only supply-chain relevant subjects.
+      const subject =
+        action.serverId ||
+        action.server ||
+        action.mcpServer ||
+        action.plugin ||
+        action.package ||
+        action.target;
+      if (!subject) return null;
+      const params = action.parameters || {};
+      const PIN_KEYS = [
+        'sha256',
+        'sha512',
+        'digest',
+        'hash',
+        'integrity',
+        'checksum',
+        'signature',
+        'sig',
+        'publisherKey',
+        'publisher_key',
+        'pinnedVersion',
+        'pinned_version',
+        'pin',
+      ];
+      const hasPin = PIN_KEYS.some(
+        (k) => params[k] !== undefined && params[k] !== null && params[k] !== ''
+      );
+      if (hasPin) return null;
+      // A registry that is the operator's own allowlisted source is fine
+      // to install without a hash — that is a reviewed decision.
+      const registry = params.registry || params.source || params.registryUrl;
+      if (registry && /\b(goodciso|local|internal|private)\b/i.test(String(registry))) {
+        return null;
+      }
+      return { subject: String(subject), integrityPinAbsent: true };
+    },
+  },
+  {
+    // 2026-11-10 (scribe): MCP08 (Authentication & Identity) had a
+    // catalogue entry but no rule. The event-only detectable shape is a
+    // per-call authZ that is not audience-bound: a credential is presented
+    // to a server without an `audience`/`aud` claim tying it to that
+    // server, so a credential minted for one MCP server would be accepted
+    // by another. Absence of audience binding is the detectable failure.
+    id: 'unbound-audience-credential',
+    classes: ['MCP08'],
+    confidence: 'M',
+    reference: 'MCP08#identity',
+    description:
+      'A credential is presented to an MCP server without an audience ' +
+      'binding, so a token minted for one server may be replayed against ' +
+      'another.',
+    test(event) {
+      const action = event?.action || {};
+      const params = action.parameters || {};
+      // Find a credential-shaped field, at any depth (bounded).
+      const CRED_KEY_RE = /^(authorization|bearer|token|api[_-]?key|access[_-]?token|id[_-]?token|credential)$/i;
+      const AUD_KEY_RE = /^(aud|audience|audiences|target[_-]?audience|intended[_-]?audience|azp|client[_-]?id)$/i;
+      const MAX_DEPTH = 5;
+      const MAX_NODES = 120;
+      const seen = new Set();
+      let nodes = 0;
+
+      const walk = (value, path, depth) => {
+        if (nodes >= MAX_NODES || depth > MAX_DEPTH) return null;
+        if (value === null || typeof value !== 'object') return null;
+        if (seen.has(value)) return null;
+        seen.add(value);
+        nodes += 1;
+
+        if (Array.isArray(value)) {
+          for (let i = 0; i < value.length; i += 1) {
+            const hit = walk(value[i], `${path}[${i}]`, depth + 1);
+            if (hit) return hit;
+          }
+          return null;
+        }
+
+        const keys = Object.keys(value);
+        const credKey = keys.find(
+          (k) => CRED_KEY_RE.test(k) && typeof value[k] === 'string' && value[k].length >= 8
+        );
+        if (credKey) {
+          const hasAudience = keys.some(
+            (k) => AUD_KEY_RE.test(k) && value[k] !== undefined && value[k] !== null && value[k] !== ''
+          );
+          if (!hasAudience) {
+            return { credentialField: path ? `${path}.${credKey}` : credKey, audienceAbsent: true };
+          }
+        }
+        for (const k of keys) {
+          const hit = walk(value[k], path ? `${path}.${k}` : k, depth + 1);
+          if (hit) return hit;
+        }
+        return null;
+      };
+
+      const hit = walk(params, '', 0);
+      if (!hit) return null;
+      // A credential for the SAME server the call is going to is fine; the
+      // risk is a credential with no audience claim at all.
+      return hit;
     },
   },
 ];

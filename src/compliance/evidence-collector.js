@@ -42,6 +42,19 @@ class EvidenceCollector extends EventEmitter {
 
     // Default collectors for common evidence types
     this.registerDefaultCollectors();
+
+    // 2026-11-10 (scribe): hydrate previously collected evidence from the
+    // durable store. Evidence was in-memory only, so it was lost on
+    // restart and the dashboard always reported totalEvidence: 0.
+    try {
+      const persistence = require('./persistence');
+      const restored = persistence.applyEvidenceTo(this);
+      if (restored > 0) {
+        console.log(`[evidence-collector] restored ${restored} evidence record(s) from ${persistence.STATE_FILE}`);
+      }
+    } catch (err) {
+      console.error('[evidence-collector] failed to restore evidence:', err.message);
+    }
   }
 
   /**
@@ -180,6 +193,15 @@ class EvidenceCollector extends EventEmitter {
       // Store evidence
       this.evidenceStore.set(evidence.id, evidence);
 
+      // 2026-11-10 (scribe): write through to the durable store so the
+      // evidence survives a restart and the dashboard can report a
+      // real totalEvidence count.
+      try {
+        require('./persistence').recordEvidence(evidence);
+      } catch (err) {
+        console.error('[evidence-collector] failed to persist evidence:', err.message);
+      }
+
       // Update schedule
       const schedule = this.collectionSchedule.get(controlId);
       if (schedule) {
@@ -200,6 +222,15 @@ class EvidenceCollector extends EventEmitter {
       };
 
       this.emit('evidenceFailed', failedEvidence);
+
+      // 2026-11-10 (scribe): persist failures too. A collection that
+      // failed is evidence of the control being unevidenced, and hiding
+      // that would make the posture look better than it is.
+      try {
+        require('./persistence').recordEvidence(failedEvidence);
+      } catch (err) {
+        console.error('[evidence-collector] failed to persist failure:', err.message);
+      }
 
       return failedEvidence;
     }

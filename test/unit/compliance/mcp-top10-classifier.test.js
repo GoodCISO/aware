@@ -1,0 +1,246 @@
+// Unit tests for the AWARE MCP Top 10 classifier.
+//
+// 2026-11-10 (scribe): the module was referenced by the gateway
+// (`require('./mcp-top10-classifier')`) but had never been written. The
+// require was made tolerant so its absence did not crash the whole
+// compliance router — which is what actually prevented the v1 backend
+// from starting. These tests pin the behaviour so the module cannot
+// silently regress to empty output.
+//
+// The rules cover 8 of the 10 OWASP MCP Top 10 classes. MCP06 and MCP07
+// have no deterministic, event-only test — they need session or
+// transport state that a single decision record does not carry.
+
+const test = require('node:test');
+const assert = require('node:assert');
+
+const {
+  createMCP10Classifier,
+  classify,
+  classifyAndLog,
+  RULES,
+  MCP_TOP_10_CONTROL_IDS,
+} = require('../../../src/compliance/mcp-top10-classifier');
+
+test('the catalogue exposes all ten OWASP MCP Top 10 control ids', () => {
+  assert.strictEqual(MCP_TOP_10_CONTROL_IDS.length, 10, 'expected 10 control ids');
+  assert.deepStrictEqual(
+    [...MCP_TOP_10_CONTROL_IDS].sort(),
+    Array.from({ length: 10 }, (_, i) => `MCP${String(i + 1).padStart(2, '0')}`).sort()
+  );
+});
+
+test('every rule maps to a known control id and has a valid confidence', () => {
+  const known = new Set(MCP_TOP_10_CONTROL_IDS);
+  for (const r of RULES) {
+    assert.ok(r.id && r.classes && r.confidence, 'rule needs id, classes, confidence');
+    for (const c of r.classes) {
+      assert.ok(known.has(c), `rule ${r.id} maps to unknown control ${c}`);
+    }
+    assert.ok(['H', 'M', 'L'].includes(r.confidence), 'confidence must be H, M or L');
+    assert.ok(typeof r.test === 'function', 'rule needs a test function');
+  }
+});
+
+test('classify returns no annotations for a benign decision', () => {
+  const mapper = createMCP10Classifier({ enableWrites: false });
+  const anns = classify(mapper, {
+    decisionId: 'd-benign',
+    action: { type: 'tool_dispatch', toolId: 'read_file', parameters: { path: '/tmp/a.txt' } },
+    context: { sessionId: 's1' },
+  });
+  assert.strictEqual(anns.length, 0, 'benign decision must produce no annotations');
+});
+
+test('classify flags a credential in top-level tool parameters', () => {
+  const mapper = createMCP10Classifier({ enableWrites: false });
+  const anns = classify(mapper, {
+    decisionId: 'd-creds',
+    action: {
+      type: 'tool_dispatch',
+      toolId: 'http_fetch',
+      parameters: { authorization: 'Bearer sk-liv...f456' },
+    },
+    context: { sessionId: 's1' },
+  });
+  assert.ok(anns.length > 0, 'expected at least one annotation');
+  assert.ok(
+    anns.some((a) => a.classes.includes('MCP01')),
+    'expected MCP01 (credential exposure) annotation'
+  );
+  assert.ok(
+    anns.every((a) => a.sourceDecisionId === 'd-creds'),
+    'annotations carry sourceDecisionId'
+  );
+});
+
+test('classify does NOT flag a credential nested below the top level', () => {
+  // Documents a real limitation of the credential rule: it inspects only
+  // the top level of action.parameters (it iterates Object.entries). A
+  // credential inside parameters.headers is not detected. This is a
+  // coverage gap, not a design decision — the test exists so the gap
+  // stays visible rather than being assumed away.
+  const mapper = createMCP10Classifier({ enableWrites: false });
+  const anns = classify(mapper, {
+    decisionId: 'd-nested',
+    action: {
+      type: 'tool_dispatch',
+      toolId: 'http_fetch',
+      parameters: { headers: { authorization: 'Bearer sk-liv...f456' } },
+    },
+    context: { sessionId: 's1' },
+  });
+  assert.ok(
+    !anns.some((a) => a.classes.includes('MCP01')),
+    'nested credentials are currently NOT detected — this test pins that known gap'
+  );
+});
+
+test('classify flags shell metacharacters in tool parameters', () => {
+  const mapper = createMCP10Classifier({ enableWrites: false });
+  const anns = classify(mapper, {
+    decisionId: 'd-shell',
+    action: {
+      type: 'tool_dispatch',
+      toolId: 'shell_exec',
+      parameters: { cmd: 'ls; rm -rf /' },
+    },
+    context: { sessionId: 's1' },
+  });
+  assert.ok(
+    anns.some((a) => a.classes.includes('MCP05')),
+    'expected MCP05 (command injection) annotation'
+  );
+});
+
+test('classify flags content fetched from a non-allowlisted host', () => {
+  const mapper = createMCP10Classifier({
+    enableWrites: false,
+    allowlist: ['docs.internal.example'],
+  });
+  const anns = classify(mapper, {
+    decisionId: 'd-src',
+    action: {
+      type: 'tool_dispatch',
+      toolId: 'http_fetch',
+      parameters: { url: 'https://untrusted.example/page' },
+    },
+    context: { sessionId: 's1' },
+  });
+  assert.ok(
+    anns.some((a) => a.classes.includes('MCP04')),
+    'expected MCP04 (untrusted content) annotation'
+  );
+});
+
+test('classify does NOT flag a fetch from an allowlisted host', () => {
+  const mapper = createMCP10Classifier({
+    enableWrites: false,
+    allowlist: ['docs.internal.example'],
+  });
+  const anns = classify(mapper, {
+    decisionId: 'd-src-ok',
+    action: {
+      type: 'tool_dispatch',
+      toolId: 'http_fetch',
+      parameters: { url: 'https://docs.internal.example/page' },
+    },
+    context: { sessionId: 's1' },
+  });
+  assert.ok(
+    !anns.some((a) => a.classes.includes('MCP04')),
+    'an allowlisted fetch must not be annotated'
+  );
+});
+
+test('classify flags an MCP server that is not allowlisted', () => {
+  const mapper = createMCP10Classifier({
+    enableWrites: false,
+    serverAllowlist: ['good-server'],
+  });
+  const anns = classify(mapper, {
+    decisionId: 'd-server',
+    action: {
+      type: 'mcp_message',
+      toolId: 'shadow-server',
+      // The rule reads action.serverId (or action.server / action.mcpServer
+      // / action.target) — not context.server.
+      serverId: 'shadow-server',
+      parameters: {},
+    },
+    context: { sessionId: 's1' },
+  });
+  assert.ok(
+    anns.some((a) => a.classes.includes('MCP09')),
+    'expected MCP09 (shadow server) annotation'
+  );
+});
+
+test('every annotation carries the fields the audit writer needs', () => {
+  const mapper = createMCP10Classifier({ enableWrites: false });
+  const anns = classify(mapper, {
+    decisionId: 'd-shape',
+    action: { type: 'tool_dispatch', toolId: 'shell_exec', parameters: { cmd: 'a && b' } },
+    context: { sessionId: 's1' },
+  });
+  assert.ok(anns.length > 0);
+  for (const a of anns) {
+    assert.ok(typeof a.rule === 'string' && a.rule.length > 0, 'rule must be a non-empty string');
+    assert.ok(Array.isArray(a.classes) && a.classes.length > 0, 'classes must be a non-empty array');
+    assert.ok(['H', 'M', 'L'].includes(a.confidence), 'confidence must be H, M or L');
+    assert.ok(
+      a.sourceDecisionId === 'd-shape' || a.sourceDecisionId === null,
+      'sourceDecisionId must be present or null'
+    );
+    assert.ok(a.evidence && typeof a.evidence === 'object', 'evidence must be an object');
+  }
+});
+
+test('classifyAndLog writes nothing and returns [] when writes are disabled', async () => {
+  // classifyAndLog() returns early with [] when enableWrites is false
+  // (src/compliance/mcp-top10-classifier.js:327) — it does not return the
+  // annotations it would have written. This test pins that contract.
+  const mapper = createMCP10Classifier({ enableWrites: false });
+  const anns = await classifyAndLog(mapper, {
+    decisionId: 'd-log',
+    action: { type: 'tool_dispatch', toolId: 'shell_exec', parameters: { cmd: 'ls; rm -rf /' } },
+    context: { sessionId: 's1' },
+  });
+  assert.ok(Array.isArray(anns), 'classifyAndLog must return an array');
+  assert.strictEqual(anns.length, 0, 'no writes means no returned annotations');
+});
+
+test('classifyAndLog writes annotations to the audit logger', async () => {
+  const written = [];
+  const auditLogger = {
+    logDecision: async (record) => { written.push(record); },
+  };
+  const mapper = createMCP10Classifier({ enableWrites: true, auditLogger });
+  const anns = await classifyAndLog(mapper, {
+    decisionId: 'd-log2',
+    action: { type: 'tool_dispatch', toolId: 'shell_exec', parameters: { cmd: 'ls; rm -rf /' } },
+    context: { sessionId: 's1' },
+  });
+  assert.ok(Array.isArray(anns), 'classifyAndLog must return an array');
+  assert.ok(anns.length > 0, 'expected at least one annotation');
+  assert.ok(
+    anns.some((a) => a.classes.includes('MCP05')),
+    'expected MCP05 (command injection) annotation'
+  );
+  assert.strictEqual(written.length, anns.length, 'one audit record per annotation');
+  assert.strictEqual(written[0].action.type, 'mcp10_annotation');
+  assert.strictEqual(written[0].parentDecisionId, 'd-log2');
+});
+
+test('the classifier tolerates a malformed decision', () => {
+  const mapper = createMCP10Classifier({ enableWrites: false });
+  // Must not throw — a broken decision must not take down the router.
+  const anns = classify(mapper, {});
+  assert.ok(Array.isArray(anns));
+});
+
+test('the classifier tolerates a null decision', () => {
+  const mapper = createMCP10Classifier({ enableWrites: false });
+  const anns = classify(mapper, null);
+  assert.ok(Array.isArray(anns));
+});

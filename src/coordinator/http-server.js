@@ -374,6 +374,15 @@ export async function startServer(opts = {}) {
       if (req.method === 'POST' && req.url === '/coordinate') {
         return await handleCoordinate(req, res, router, coordinateFn, requestId);
       }
+      // 2026-11-10 (scribe): the audit-chain write endpoint. The gateway
+      // mounts the audit volume READ-ONLY, so it cannot write to the
+      // chain itself — POST /api/audit/log there failed with EROFS. The
+      // coordinator mounts the same volume read-write, so the gateway
+      // proxies the write here. This is the only place the chain is
+      // written from an API path.
+      if (req.method === 'POST' && req.url === '/api/audit/log') {
+        return await handleAuditLog(req, res, requestId);
+      }
       return sendJson(res, 404, { error: 'not found', kind: 'request', request_id: requestId });
     } catch (err) {
       // Internal error envelope
@@ -402,10 +411,23 @@ export async function startServer(opts = {}) {
   // Anything beyond that is a genuinely hung request we want to abort at
   // the socket.
   //
+  // 2026-11-09 fix (AWARE bring-up): the 60s socket timeout was SHORTER
+  // than the request-level T0 timeout (config.coordinator.requestTimeoutMs,
+  // default 120_000). A standard /coordinate call measures ~58s, so any
+  // request that ran past 60s had its socket destroyed by Node before the
+  // T0 race could fire. The client saw the connection close with NO
+  // response at all (RemoteDisconnected) instead of the intended 504
+  // timeout envelope - a request that was working, not a hung one.
+  //
+  // The socket timeout must therefore be LONGER than the request timeout,
+  // so the T0 race gets the chance to return a proper 504. The request
+  // timeout plus a small tail covers the socket-idle window between the
+  // response being written and the connection being closed.
+  //
   // Note: must be set as a property on the server instance, not via the
   // createServer options object — verified 2026-07-12 that the options
   // variant is silently ignored (server.timeout stays 0).
-  server.timeout = 60_000;
+  server.timeout = config.coordinator.requestTimeoutMs + 10_000;
 
   // Listen on the requested port; resolve when ready.
   await new Promise((resolve, reject) => {
@@ -573,6 +595,122 @@ async function handleHealth(req, res, router, requestId) {
  *   - T0 timeout:    Promise.race against REQUEST_TIMEOUT_MS (or body.timeout_ms); 504 on timeout
  *   - T2 cost-cap:   per-request USD ceiling (default REQUEST_COST_CAP_USD); 402 on overrun
  */
+/**
+ * POST /api/audit/log — append a decision record to the audit chain.
+ *
+ * The gateway proxies to this because it mounts the audit volume
+ * read-only. Writes are best-effort: a failure here must not take the
+ * coordinator down, and the response says so explicitly.
+ */
+/**
+ * Record a FAILED /coordinate attempt on the audit chain.
+ *
+ * 2026-11-10 (scribe): the chain previously recorded only successes.
+ * logDecisionFireAndCodert was reached only on the success path, so the
+ * timeout, backend-error, cost-cap and ok=false branches all returned
+ * before any audit write. The chain could prove what the system DID, but
+ * not what the system REFUSED to do - and a chain that omits failures is
+ * not evidence of completeness.
+ *
+ * This writes the same record shape as the success path, with
+ * outcome.success = false and a populated errorMessage, so a verifier can
+ * enumerate terminal outcomes (success AND failure).
+ */
+/**
+ * Total the cost a coordinate call actually incurred.
+ *
+ * The coordinate envelope reports cost in several shapes depending on
+ * which layers ran:
+ *   - `cost`                -> {attempts_usd, refinement_usd, judge_usd}
+ *   - `attempts[].prm_meta.cost_usd` -> per-attempt cost
+ *   - `cost_usd`            -> a flat total, when present
+ *
+ * Returns null when the envelope reports no cost at all, so the caller
+ * can distinguish "cost unknown" from "cost within cap".
+ *
+ * @param {Object} result - the coordinate result envelope
+ * @returns {number|null}
+ */
+function resolveResultCostUsd(result) {
+  if (!result || typeof result !== 'object') return null;
+
+  // Prefer the `cost` object when present: it is the envelope's own
+  // accounting (attempts_usd + refinement_usd + judge_usd). Do NOT also
+  // sum attempts[].prm_meta.cost_usd in that case — those are the same
+  // provider spend the object already totals, so adding both would
+  // double-count and could trip a cap that was not actually exceeded.
+  if (result.cost && typeof result.cost === 'object') {
+    const parts = [];
+    for (const v of Object.values(result.cost)) {
+      const n = Number(v);
+      if (Number.isFinite(n)) parts.push(n);
+    }
+    if (parts.length > 0) return parts.reduce((s, n) => s + n, 0);
+  }
+
+  // No cost object: fall back to the per-attempt costs.
+  if (Array.isArray(result.attempts)) {
+    const parts = [];
+    for (const a of result.attempts) {
+      const n = Number(a?.prm_meta?.cost_usd);
+      if (Number.isFinite(n)) parts.push(n);
+    }
+    if (parts.length > 0) return parts.reduce((s, n) => s + n, 0);
+  }
+
+  // Finally, a flat total if the envelope carries one.
+  const flat = Number(result.cost_usd);
+  if (Number.isFinite(flat)) return flat;
+
+  return null;
+}
+
+function logFailedDecision({ decisionId, failureKind, errorMessage, latencyMs, body, costUsd }) {
+  logDecisionFireAndCodert({
+    decisionId,
+    parentDecisionId: null,
+    timestamp: new Date().toISOString(),
+    actor: { agentId: (body && body.agentId) || 'unknown', trustScore: 1.0 },
+    action: {
+      type: 'coordinate',
+      target: 'aware-coordinator',
+      reason: task_type_reason(body && body.task_type),
+    },
+    context: {
+      taskType: (body && body.task_type) || 'standard',
+      K: (body && body.K) || null,
+      sessionId: (body && body.sessionId) || null,
+    },
+    outcome: {
+      success: false,
+      latencyMs,
+      errorMessage: errorMessage || failureKind || 'coordinate failed',
+      failureKind: failureKind || 'internal',
+      costUsd: costUsd ?? null,
+    },
+  });
+}
+
+async function handleAuditLog(req, res, requestId) {
+  try {
+    const { logDecision } = getDecisionLogger();
+    const decision = req.body || {};
+    if (!decision.decisionId) {
+      decision.decisionId = requestId;
+    }
+    const hash = await logDecision(decision);
+    return sendJson(res, 201, { success: true, decisionId: decision.decisionId, hash });
+  } catch (err) {
+    console.error('[aware-coordinator] audit log write failed:', err.message);
+    return sendJson(res, 500, {
+      success: false,
+      error: err.message,
+      kind: 'audit',
+      request_id: requestId,
+    });
+  }
+}
+
 async function handleCoordinate(req, res, router, coordinateFn, requestId) {
   const startMs = Date.now();
   const log = (extra) => logConversationFireAndCodert({
@@ -692,6 +830,13 @@ async function handleCoordinate(req, res, router, coordinateFn, requestId) {
   } catch (err) {
     if (isTimeoutError(err)) {
       log({ problem: body.problem, taskType: body.task_type, k: body.K, sessionId: body.sessionId, agentId: body.agentId, errorKind: 'timeout', errorMessage: `request exceeded ${timeoutMs}ms timeout` });
+    logFailedDecision({
+      decisionId: requestId,
+      failureKind: 'timeout',
+      errorMessage: `request exceeded ${timeoutMs}ms timeout`,
+      latencyMs: Date.now() - startMs,
+      body,
+    });
       return sendJson(res, 504, {
         error: `request exceeded ${timeoutMs}ms timeout`,
         kind: 'timeout',
@@ -702,18 +847,45 @@ async function handleCoordinate(req, res, router, coordinateFn, requestId) {
     const isBackend = /all .* backends failed|no healthy backends|cannot generate/i.test(message);
     const kind = isBackend ? 'backend' : 'internal';
     log({ problem: body.problem, taskType: body.task_type, k: body.K, sessionId: body.sessionId, agentId: body.agentId, errorKind: kind, errorMessage: message });
+    logFailedDecision({
+      decisionId: requestId,
+      failureKind: kind,
+      errorMessage: message,
+      latencyMs: Date.now() - startMs,
+      body,
+    });
     return sendJson(res, isBackend ? 503 : 500, { error: message, kind, request_id: requestId });
   }
 
   // T2: cost-cap check — coordinate() should have honored it via context.cost_cap_usd,
   // but if a backend doesn't report cost, the result envelope can't enforce it. We surface
   // a 402 if the result reports a cost_usd that exceeds the cap.
-  if (result && result.cost_usd != null && Number(result.cost_usd) > costCapUsd) {
-    log({ problem: body.problem, taskType: body.task_type, k: body.K, sessionId: body.sessionId, agentId: body.agentId, result, errorKind: 'cost_cap', errorMessage: `cost_usd ${result.cost_usd} exceeded cap ${costCapUsd}` });
+  //
+  // 2026-11-10 (scribe): the check read `result.cost_usd`, but the
+  // coordinate envelope does not carry that field. It carries `cost` as an
+  // object — {attempts_usd, refinement_usd, judge_usd} — and the per-attempt
+  // cost under attempts[].prm_meta.cost_usd. So `result.cost_usd` was
+  // always undefined, the comparison was always false, and the cost-cap
+  // branch was UNREACHABLE: a request with cost_cap_usd=0.000001 still
+  // succeeded and spent ~$0.003. The cap was documented but not enforced.
+  //
+  // resolveResultCostUsd() totals every cost the envelope reports, so the
+  // cap is checked against what the call actually cost.
+  const resultCostUsd = resolveResultCostUsd(result);
+  if (resultCostUsd != null && resultCostUsd > costCapUsd) {
+    log({ problem: body.problem, taskType: body.task_type, k: body.K, sessionId: body.sessionId, agentId: body.agentId, result, errorKind: 'cost_cap', errorMessage: `cost_usd ${resultCostUsd} exceeded cap ${costCapUsd}` });
+    logFailedDecision({
+      decisionId: requestId,
+      failureKind: 'cost_cap',
+      errorMessage: `cost_usd ${resultCostUsd} exceeded cap ${costCapUsd}`,
+      latencyMs: Date.now() - startMs,
+      body,
+      costUsd: resultCostUsd,
+    });
     return sendJson(res, 402, {
-      error: `cost_usd ${result.cost_usd} exceeded cap ${costCapUsd}`,
+      error: `cost_usd ${resultCostUsd} exceeded cap ${costCapUsd}`,
       kind: 'cost_cap',
-      cost_usd: result.cost_usd,
+      cost_usd: resultCostUsd,
       cost_cap_usd: costCapUsd,
       request_id: requestId,
     });
@@ -724,6 +896,14 @@ async function handleCoordinate(req, res, router, coordinateFn, requestId) {
     const errType = (result.error && result.error.type) || 'internal_error';
     const errMessage = (result.error && result.error.message) || 'coordinate failed';
     log({ problem: body.problem, taskType: body.task_type, k: body.K, sessionId: body.sessionId, agentId: body.agentId, result, errorKind: errType, errorMessage: errMessage });
+    logFailedDecision({
+      decisionId: requestId,
+      failureKind: errType,
+      errorMessage: errMessage,
+      latencyMs: Date.now() - startMs,
+      body,
+      costUsd: result.cost_usd ?? null,
+    });
     const status = errType === 'invalid_input' ? 400
                  : errType === 'upstream_rate_limited' ? 503
                  : errType === 'upstream_error' ? 503

@@ -232,8 +232,17 @@ test('config: snapshot() shape is stable', (t) => {
     'coordinatorUrl', 'host', 'killSwitch', 'port', 'proxyTimeoutMs',
   ]);
   assert.deepEqual(Object.keys(snap.model).sort(), [
-    'mode', 'ollamaUrl', 'providerApiKey', 'providerHost',
+    // providerModel added 2026-11-10 (scribe): the provider model name
+    // was previously hard-coded inside the pinned rl-pipeline dependency,
+    // so it could not be changed without republishing that library.
+    // AWARE_PROVIDER_MODEL makes it an operator setting.
+    'mode', 'ollamaTimeoutMs', 'ollamaUrl', 'providerApiKey', 'providerHost',
+    'providerModel',
   ]);
+  // The Ollama generation timeout must default to a value that clears a
+  // real Qwen3.5-9B solution generation (measured 4.1-4.8s), and must
+  // remain overridable and range-checked.
+  assert.strictEqual(snap.model.ollamaTimeoutMs, 60_000);
   assert.deepEqual(Object.keys(snap.rlPipeline), ['path']);
   assert.deepEqual(Object.keys(snap.db).sort(), [
     'connectionTimeoutMs', 'database', 'enabled', 'host', 'password', 'port', 'user',

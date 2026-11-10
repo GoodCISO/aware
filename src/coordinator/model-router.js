@@ -34,6 +34,9 @@ import { request as httpRequest } from 'node:http';
  *        Each client must implement generate(prompt, opts) → Promise<{reasoning, cost_usd, ...}>.
  *        `healthy()` is optional — if provided, the router probes it before invoking.
  * @param {string} [options.mode='hybrid'] — 'online' | 'hybrid' | 'offline'
+ * @param {string} [options.model=null] — provider model name, surfaced on the
+ *        returned object so downstream consumers (rl-pipeline's PRM cache key)
+ *        can label what actually served the request.
  * @param {number} [options.healthTtlMs=30_000] — how long to cache health results
  * @param {number} [options.healthTimeoutMs=2_000] — per-probe timeout
  * @returns {{
@@ -42,7 +45,7 @@ import { request as httpRequest } from 'node:http';
  *   whichClient: () => string|null,
  * }}
  */
-export function makeModelRouter({ clients, mode = 'hybrid', healthTtlMs = 30_000, healthTimeoutMs = 2_000 } = {}) {
+export function makeModelRouter({ clients, mode = 'hybrid', model = null, healthTtlMs = 30_000, healthTimeoutMs = 2_000 } = {}) {
   if (!Array.isArray(clients) || clients.length === 0) {
     throw new Error('makeModelRouter: clients must be a non-empty array');
   }
@@ -177,7 +180,7 @@ export function makeModelRouter({ clients, mode = 'hybrid', healthTtlMs = 30_000
     return lastClient;
   }
 
-  return { generate, health, whichClient };
+  return { generate, health, whichClient, model: model || null };
 }
 
 /**

@@ -89,6 +89,24 @@ async function withServer(opts, fn) {
   }
 }
 
+test('server socket timeout is LONGER than the request timeout (T0)', async () => {
+  // Regression (2026-11-09): server.timeout was hardcoded to 60_000 while
+  // config.coordinator.requestTimeoutMs defaults to 120_000. A standard
+  // /coordinate call measures ~58s, so the socket was destroyed by Node
+  // before the T0 race could return a 504. The client saw the connection
+  // close with NO response (RemoteDisconnected) instead of a timeout
+  // envelope.
+  await withServer({ port: 0, router: stubRouter([{ name: 'the provider', healthy: true }]) }, async (h) => {
+    const config = (await import('../../../src/config/index.cjs')).default
+      ?? (await import('../../../src/config/index.cjs'));
+    const requestTimeoutMs = config.coordinator.requestTimeoutMs;
+    assert.ok(
+      h.server.timeout > requestTimeoutMs,
+      `server.timeout (${h.server.timeout}) must exceed the request timeout (${requestTimeoutMs})`
+    );
+  });
+});
+
 test('GET /version returns the coordinator version + build phase', async () => {
   await withServer({ port: 0, router: stubRouter([{ name: 'the provider', healthy: true }]) }, async (h) => {
     const res = await fetch(`http://${h.host}:${h.port}/version`);

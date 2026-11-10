@@ -163,7 +163,26 @@ const config = {
     get mode() { return enumOf('AWARE_MODE', ['online', 'hybrid', 'offline'], 'hybrid'); },
     get providerApiKey() { return str('LLM_API_KEY', undefined); },
     get providerHost() { return str('LLM_API_HOST', undefined); },
+    // Provider model name. 2026-11-10 (scribe): the model was previously
+    // hard-coded to 'MiniMax-M3' inside the pinned rl-pipeline dependency
+    // (src/clients/minimax.js DEFAULT_MODEL), so it could not be changed
+    // without republishing that library. rl-pipeline's makeMinimaxClient
+    // already honours options.model, so the only gap was that AWARE
+    // called makeProviderClient() with no arguments. This env var closes
+    // that gap and makes the model an operator setting.
+    // MiniMax-M3.1-Flash is the current default: it is the fastest tier
+    // and the cheapest per call, and the PRM judge is only ranking
+    // attempts — not producing them.
+    get providerModel() { return str('AWARE_PROVIDER_MODEL', 'MiniMax-M3.1-Flash'); },
     get ollamaUrl() { return str('OLLAMA_URL', 'http://127.0.0.1:11434'); },
+    // Timeout for a single Ollama generation request.
+    // The previous hardcoded 5_000ms default was a coin-flip against
+    // Qwen3.5-9B on Apple Silicon: measured 4.1-4.8s for a solution
+    // generation, so roughly half of all requests aborted mid-flight
+    // and the router fell through to the (unauthenticated) provider.
+    // 60s gives real headroom; the coordinator's own request timeout
+    // (AWARE_REQUEST_TIMEOUT_MS) still bounds the overall call.
+    get ollamaTimeoutMs() { return num('AWARE_OLLAMA_TIMEOUT_MS', 60_000, { min: 1000, max: 600_000 }); },
   },
 
   // rl-pipeline (sibling repo) — path is computed but not validated here;
@@ -376,7 +395,9 @@ config.snapshot = function snapshot() {
       mode: c.model.mode,
       providerApiKey: redact('providerApiKey', c.model.providerApiKey),
       providerHost: c.model.providerHost,
+      providerModel: c.model.providerModel,
       ollamaUrl: c.model.ollamaUrl,
+      ollamaTimeoutMs: c.model.ollamaTimeoutMs,
     },
     rlPipeline: {
       path: c.rlPipeline.path,

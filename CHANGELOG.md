@@ -2,6 +2,38 @@
 
 All notable changes to AWARE Evolution are documented here.
 
+## [2.12.0] — 2026-11-10 — Compliance engine becomes persistent and auditable; MCP Top 10 classifier shipped; provider model made configurable
+
+**Release type:** minor. New capability (MCP Top 10 classification, durable compliance state, failure-path auditing) plus four defect fixes that each disabled a documented control.
+
+### Added
+
+- **OWASP MCP Top 10 classifier** (`src/compliance/mcp-top10-classifier.js`) — 8 rules covering 8 of the 10 OWASP MCP Top 10 classes, with confidence ratings and evidence capture. The module was **referenced by the gateway but had never been written**; the require was made tolerant so its absence would not crash the compliance router, which is what actually prevented the v1 backend from starting. MCP06 and MCP07 have no deterministic, event-only test and are not yet covered.
+- **Durable compliance state** (`src/compliance/persistence.js`) — assessments and collected evidence now persist to `/data/compliance/compliance-state.json` and survive a restart. Previously both lived only in memory, so the compliance dashboard read 0/0 after every deployment regardless of what had been collected.
+- **Provider model as an operator setting** (`AWARE_PROVIDER_MODEL`, default `MiniMax-M3.1-Flash`) — the model name was previously hard-coded inside the pinned rl-pipeline dependency and could not be changed without republishing that library.
+- **Failure outcomes on the decision chain** — timeout, backend error, internal error, cost-cap, and `ok:false` responses are now written to the hash-chained audit trail. Previously only successful decisions were recorded, so the chain could evidence *what succeeded* but not *completeness*.
+- **PRM cache model backfill** (`db/backfill-prm-model-20261110.sql`) — 515,327 rows in `aware_prm_cache` were labelled `primary-model` because the coordinator never passed a model name and rl-pipeline's cache key read a router property that was never set.
+- **Compliance UI service** (`aware-2-ui`) — the React compliance dashboard, served by nginx, proxying `/api` to the v2 gateway.
+
+### Fixed
+
+- **The cost cap was not enforced.** The check read `result.cost_usd`, but the coordinate envelope carries `cost: {attempts_usd, refinement_usd, judge_usd}`. The field was always `undefined`, the comparison was always false, and the 402 branch was unreachable — a request with `cost_cap_usd=0.000001` succeeded and spent ~$0.003. Now resolved by `resolveResultCostUsd()`, which prefers the envelope's own accounting and does not double-count the per-attempt costs.
+- **The audit export failed for recent records.** `getChainBetween()` resolved from the in-memory index, which flushes on a 5-second debounce, so exporting the newest record returned `Decision <id> not found in index` even though the record was on disk and verified. It now falls back to reading the JSONL log.
+- **The gateway could not write compliance state.** It mounts the audit volume read-only — deliberately, so a compromised gateway cannot rewrite the audit trail — so state written there failed with `EROFS`. Compliance state now has its own `aware-2-compliance-data` volume, mounted read-write to both the gateway and the coordinator.
+- **The compliance dashboard rendered fabricated figures.** `API_BASE` pointed at `localhost:8080`, held by an unrelated process, and the fetch failure path substituted mock numbers (ISO 27001 89, SOC 2 72, GDPR 65, overall 65) as if they were live readings. The mock fallback is deleted: failures now render an error. Framework lists and counts are driven by the API.
+
+### Changed
+
+- **The compliance posture is now measured, not asserted.** Posture reads from persisted state: CSA_AI_CM 5/184 controls assessed. The remaining seven frameworks report 0 assessed, which is the honest state — the engine works, the assessments have never been recorded.
+- **The provider model is exposed on the router** (`src/coordinator/model-router.js`), which also removes the `prm_model` label drift described above.
+
+### Notes
+
+- New unit tests: `test/unit/compliance/mcp-top10-classifier.test.js` (14 tests, all passing).
+- The full unit suite runs **961 tests: 838 pass, 123 fail**. The 123 failures are **pre-existing and unrelated** — verified by running the suite against a pristine worktree of `main` (661 tests, 537 pass, 124 fail) and against `main` with only these changes applied (675 tests, 551 pass, 124 fail). The failing test *names* are identical before and after: **zero regressions**. The failures are in RLM schema validation, CORS allowlist, and the aidefend mapper — all from untracked work dated 2026-09-25 that is not part of this release.
+- The credential rule inspects only **top-level** `action.parameters` keys; a credential nested in `parameters.headers` is not detected. This is a known coverage gap, pinned by a test so it stays visible.
+- Not released in this version: `src/compliance/mcp-governance-catalog.js`, `src/trainer/security-sensitive-diff.js`, and their tests are untracked work dated 2026-09-25 that predates this release and is excluded from it.
+
 ## [2.11.1] — 2026-08-02 — Docs patch: README compliance frameworks table updated for v2.11.0 catalogs
 
 **Release type:** patch. README.md only — no code/runtime changes from v2.11.0. Closes the post-release README gap surfaced in the Herald website audit cycle.

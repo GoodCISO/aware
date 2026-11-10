@@ -69,11 +69,38 @@ export const anomalyAPI = {
 };
 
 // Compliance endpoints
+//
+// 2026-11-10 (scribe): these four calls pointed at the v1 mock backend's
+// routes (/compliance/coverage, /compliance/readiness,
+// /compliance/frameworks/:id/evidence). None of them exist in the live
+// engine — src/api/routes/compliance.js exposes /frameworks,
+// /frameworks/:frameworkId, /posture, /evidence, /gaps, /reports and the
+// per-framework regulatory views. Every call returned 404, and the
+// container's catch block replaced the result with invented numbers.
+//
+// The real shapes are:
+//   /posture    → {overallScore, overallPercentage, overallStatus,
+//                  frameworks:[{frameworkId, frameworkName, score, percentage,
+//                  status, controlsAssessed, controlsTotal,
+//                  compliantControls, nonCompliantControls, openGaps}],
+//                  totalGaps, openGaps, criticalGaps}
+//   /frameworks → {frameworks:[{id, name, version}]}
+//   /evidence   → {totalEvidence, byStatus, byControl, collectors, schedules}
 export const complianceAPI = {
-  getCoverage: () => api.get('/compliance/coverage'),
+  // Overall posture across every framework, plus per-framework posture.
+  getPosture: () => api.get('/compliance/posture'),
+  // Framework catalogue. The per-framework control count lives on the
+  // posture entry (controlsTotal), so this is metadata only.
   getFrameworks: () => api.get('/compliance/frameworks'),
-  getEvidence: (framework) => api.get(`/compliance/frameworks/${framework}/evidence`),
-  getReadiness: () => api.get('/compliance/readiness'),
+  // One framework's controls with their assessment status.
+  getFramework: (frameworkId) => api.get(`/compliance/frameworks/${frameworkId}`),
+  // Evidence summary across all collectors.
+  getEvidence: () => api.get('/compliance/evidence'),
+  // Open gaps, optionally filtered.
+  getGaps: (params) => api.get('/compliance/gaps', { params }),
+  getGapStats: () => api.get('/compliance/gaps/stats'),
+  // Reports.
+  getReports: () => api.get('/compliance/reports'),
   getAuditReport: (id) => api.get(`/compliance/reports/${id}`),
 };
 

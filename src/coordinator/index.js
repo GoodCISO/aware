@@ -218,7 +218,12 @@ export async function buildDefaultRouter(opts = {}) {
     provider = {
       name: 'provider',
       generate: async (prompt, genOpts) => {
-        const client = makeProviderClient();
+        // 2026-11-10 (scribe): pass the operator-configured model through.
+        // rl-pipeline's makeMinimaxClient already honours options.model;
+        // previously AWARE called it with no arguments, so the model was
+        // pinned to the library's DEFAULT_MODEL ('MiniMax-M3') and could
+        // only be changed by republishing the dependency.
+        const client = makeProviderClient({ model: config.model.providerModel });
         return await client.generate(prompt, genOpts);
       },
     };
@@ -235,11 +240,19 @@ export async function buildDefaultRouter(opts = {}) {
 
   // Offline: Ollama (always present, even in online mode it's just unused)
   // The Ollama client wraps the Ollama HTTP API.
-  const ollama = opts.ollamaClient || buildDefaultOllamaClient(ollamaUrl);
+  const ollama = opts.ollamaClient || buildDefaultOllamaClient(ollamaUrl, opts.ollamaTimeoutMs);
 
   return makeModelRouter({
     clients: [provider, ollama],
     mode,
+    // 2026-11-10 (scribe): expose the provider model on the router object.
+    // rl-pipeline reads `client.model` when it builds the PRM cache key
+    // (rl-pipeline/src/index.js: `prm_model: client?.model || ...`). The
+    // router was previously returned without a `model` property, so that
+    // read was always undefined and every cache row was labelled
+    // 'primary-model' — which is why all 515,320 rows in aware_prm_cache
+    // carry that label regardless of the model that actually scored them.
+    model: config.model.providerModel,
   });
 }
 
@@ -247,7 +260,7 @@ export async function buildDefaultRouter(opts = {}) {
  * Build a minimal Ollama client (the /api/generate endpoint).
  * Uses Node's built-in fetch (Node 18+).
  */
-function buildDefaultOllamaClient(baseUrl) {
+function buildDefaultOllamaClient(baseUrl, timeoutMs) {
   return {
     name: 'ollama',
     offline: true,
@@ -264,13 +277,17 @@ function buildDefaultOllamaClient(baseUrl) {
       // (added 2026-07-12) is what suppresses that preamble for qwen3.5 in
       // Ollama 0.31.x — `num_think` / Modelfile PARAMETER think don't work.
       const model = opts.model || 'aware-qwen35-9b:latest';
-      // v2026-07-12 fix: default timeout tightened from 60s to 5s. A stuck Ollama
-      // inference (e.g. GPU held by a prior zombie request) used to block AWARE
-      // /coordinate for 60s, producing `kind=unreachable` floods in the gateway
-      // plugin. 5s is generous for Qwen3.5-9B inference on Apple Silicon (typically
-      // <2s) but short enough to fail fast and let the router's circuit-breaker
-      // mark Ollama unhealthy so the next call skips it via `model-router.js`.
-      // Override via opts.timeout_ms when needed (e.g. large prompts, slow GPUs).
+      // Timeout: config.model.ollamaTimeoutMs (AWARE_OLLAMA_TIMEOUT_MS),
+      // overridable per-call via opts.timeout_ms.
+      //
+      // History: this was hardcoded to 5_000ms to fail fast on a stuck
+      // Ollama inference. Measured against Qwen3.5-9B on Apple Silicon
+      // that was too tight for a solution-generation prompt (4.1-4.8s),
+      // so roughly half of all requests aborted and the router fell
+      // through to the provider backend. The fail-fast intent is kept by
+      // the coordinator's own AWARE_REQUEST_TIMEOUT_MS bound; this
+      // per-generation timeout only needs to be generous enough for a
+      // real generation to finish.
       const res = await fetch(`${baseUrl}/api/generate`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -282,7 +299,7 @@ function buildDefaultOllamaClient(baseUrl) {
           // Ollama 0.31.x: this boolean toggles thinking-mode for qwen3.5.
           think: opts.think === undefined ? false : opts.think,
         }),
-        signal: AbortSignal.timeout(opts.timeout_ms || 5_000),
+        signal: AbortSignal.timeout(opts.timeout_ms || timeoutMs || config.model.ollamaTimeoutMs),
       });
       if (!res.ok) {
         const body = await res.text();

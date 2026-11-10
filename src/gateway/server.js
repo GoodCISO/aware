@@ -236,7 +236,44 @@ app.get('/version', (req, res) => {
 const auditRouter = express.Router();
 function mountAudit() {
   const h = getAuditHandlers();
-  auditRouter.post('/log', express.json({ limit: '1mb' }), h.logDecisionRoute);
+  // 2026-11-10 (scribe): POST /api/audit/log used to write to the chain
+  // from the gateway process. The gateway mounts aware-2-audit-data
+  // READ-ONLY (docker-compose.coordinator.yml:151 — `:/data/audit:ro`)
+  // so that a compromised gateway cannot rewrite the audit trail. The
+  // write therefore failed with EROFS: read-only file system.
+  //
+  // The fix keeps the read-only guarantee and makes the gateway PROXY
+  // the write to the coordinator, which mounts the same volume
+  // read-write (line 334) and already appends to it after each
+  // /coordinate. The chain stays tamper-resistant from the gateway's
+  // perspective, and the write path works.
+  auditRouter.post('/log', express.json({ limit: '1mb' }), (req, res) => {
+    const target = new URL(config.gateway.coordinatorUrl);
+    const upstream = http.request({
+      method: 'POST',
+      hostname: target.hostname,
+      port: target.port || 80,
+      path: '/api/audit/log',
+      headers: {
+        'content-type': 'application/json',
+        'content-length': Buffer.byteLength(req.rawBody || JSON.stringify(req.body || {})),
+      },
+      timeout: config.gateway.proxyTimeoutMs,
+    }, (upstreamRes) => {
+      res.status(upstreamRes.statusCode || 502);
+      upstreamRes.pipe(res);
+    });
+    upstream.on('error', (err) => {
+      console.error('[gateway] audit log proxy failed:', err.message);
+      if (!res.headersSent) {
+        res.status(502).json({ success: false, error: 'audit upstream unavailable' });
+      }
+    });
+    const payload = req.rawBody && req.rawBody.length > 0
+      ? req.rawBody
+      : Buffer.from(JSON.stringify(req.body || {}));
+    upstream.end(payload);
+  });
   auditRouter.get('/chain/:decisionId', h.getChainRoute);
   auditRouter.get('/verify', h.verifyChainRoute);
   auditRouter.get('/export', h.exportChainRoute);
@@ -244,6 +281,44 @@ function mountAudit() {
 }
 mountAudit();
 app.use('/api/audit', auditRouter);
+
+// --- Compliance HTTP API --------------------------------------------------
+//
+// 2026-11-10 (scribe): the compliance UI was reading fabricated numbers.
+// The UI called GET /api/compliance/{coverage,readiness}, but those routes
+// only exist in the v1 mock backend (src/server.js), which is not running.
+// The real compliance engine lives in src/api/routes/compliance.js and is
+// mounted by the v1 APIGateway (src/api/index.js:257) — so it was
+// unreachable from the v2 gateway surface, where the UI actually talks.
+//
+// Mounting the same router here, mirroring the /api/audit pattern above.
+// The router is CJS and exports an Express Router directly, so it mounts
+// as-is. It is lazy-required so a broken compliance module cannot stop
+// the gateway from booting (the audit router does the same via
+// getAuditHandlers()).
+const complianceRouter = express.Router();
+function mountCompliance() {
+  let r;
+  try {
+    r = require('../api/routes/compliance');
+  } catch (err) {
+    console.error('[gateway] compliance routes unavailable:', err.message);
+    return;
+  }
+  // Path-scoped JSON parser: the POST handlers (/assessments,
+  // /evidence/collect, /gaps, /reports) read req.body, and the gateway
+  // deliberately has no global express.json() so the proxy path can do a
+  // raw-body passthrough. Scoping the parser to /api/compliance preserves
+  // that property for every other route.
+  //
+  // The router is mounted as-is rather than per-path: the inner router
+  // owns its own path table, and pre-registering each path here would
+  // strip the prefix before the inner router could match it.
+  complianceRouter.use(express.json({ limit: '1mb' }));
+  complianceRouter.use(r);
+}
+mountCompliance();
+app.use('/api/compliance', complianceRouter);
 
 // --- Proxy: passthrough wrap to the coordinator -------------------------
 //

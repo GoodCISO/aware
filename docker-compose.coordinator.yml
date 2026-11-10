@@ -57,6 +57,15 @@ volumes:
   # C-step finding #17: AWARE_AUDIT_RETENTION_DAYS governs how long
   # entries survive here; see scripts/audit-retention-cleanup.js
   # and docs/sop/audit-retention.md for the cleanup contract.
+  # 2026-11-10 (scribe): compliance state (assessments + collected
+  # evidence) lives in its own volume rather than in the audit volume.
+  # The audit volume is mounted READ-ONLY in the gateway so a compromised
+  # gateway cannot rewrite the audit trail; writing compliance state there
+  # failed with EROFS. Both the gateway and the coordinator run the
+  # compliance engine, so both need read-write access to this volume.
+  aware-2-compliance-data:
+    name: aware-2-compliance-data
+
   aware-2-audit-data:
     name: aware-2-audit-data
   # aware-2-ollama-models REMOVED [date-redacted]: Ollama sidecar deprecated.
@@ -120,12 +129,40 @@ services:
       # C-step finding #15: explicit CORS allowlist for the v2 gateway.
       # Comma-separated. Defaults to localhost:3001 if unset.
       - AWARE_GATEWAY_ALLOWED_ORIGINS=${AWARE_GATEWAY_ALLOWED_ORIGINS:-http://localhost:3001}
+      # SEC-002. The gateway mirrors the coordinator's bearer token so it can
+      # call /coordinate and /budget/status upstream (the coordinator's auth
+      # gate rejects unauthenticated calls with 401).
+      #
+      # The gateway boots with NODE_ENV=production (Dockerfile.gateway), and
+      # config.validate() fails closed when this token is unset or shorter
+      # than 32 chars. Without it the gateway cannot start at all - it
+      # crash-loops on every boot with:
+      #   Error: Config: AWARE_COORDINATOR_TOKEN is required and must be >=32
+      #   chars when NODE_ENV=production (SEC-002)
+      #
+      # The value comes from the operator's credential store via env_file
+      # below, exactly as the coordinator receives it.
+      - AWARE_COORDINATOR_TOKEN=${AWARE_COORDINATOR_TOKEN:-}
+    # The gateway reads the same credential store as the coordinator. The
+    # file path is operator-supplied via AWARE_CREDENTIALS_FILE (default:
+    # redacted-credential-dir/credentials.env). Required: false makes this a
+    # soft dependency so a fresh dev box still starts the gateway - it just
+    # fails the SEC-002 token check above, which is the correct fail-closed
+    # behaviour.
+    env_file:
+      - path: ${AWARE_CREDENTIALS_FILE:-redacted-credential-dir/credentials.env}
+        required: false
     volumes:
       # C-step finding #16: read-only mount of the shared audit-data
       # volume. The gateway never writes here — only reads, via the
       # audit HTTP API mounted at /api/audit/*. Read-only so a
       # compromised gateway can't tamper with the chain.
       - aware-2-audit-data:/data/audit:ro
+      # Compliance state (assessments + evidence). Read-write: the
+      # gateway runs the compliance engine and must persist what it
+      # collects. Separate from the audit volume, which stays :ro
+      # here so the gateway cannot rewrite the audit trail.
+      - aware-2-compliance-data:/data/compliance
     depends_on:
       coordinator:
         condition: service_healthy
@@ -150,13 +187,28 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.coordinator
-      # host network so the build stage can reach your git server if it
-      # lives on the host's loopback. Without this, BuildKit's build
-      # container has its own network namespace and can't see the host.
-      # Remove this if your git server is reachable on a routable address.
-      network: host
+      # 2026-11-10 (scribe): the build no longer requests `network: host`.
+      # It used to, because AWARE_RL_PIPELINE_REPO pointed at 127.0.0.1 and
+      # a BuildKit build container cannot see the host's loopback. That
+      # required the insecure entitlement network.host, which needs a
+      # dedicated buildx builder AND a client-side --allow flag that
+      # `docker compose build` has no way to pass - so the build failed
+      # with "additional privileges requested".
+      #
+      # The fix is to reach the git server over host.docker.internal, which
+      # Docker Desktop/Colima resolve to the host gateway from inside any
+      # build container. No entitlement, no extra builder, no --allow flag.
+      # Verified 2026-11-10: gitea is published on 0.0.0.0:4001 and answers
+      # on host.docker.internal:4001 with HTTP 200 from a build container.
+      #
+      # If your git server is on a routable address, the default bridge
+      # network reaches it directly and this stays unnecessary.
       args:
-        - AWARE_RL_PIPELINE_TAG=v0.2.2
+        # 2026-11-10 (scribe): was hardcoded v0.2.2. The pin is operator
+        # config, not build policy - it now comes from AWARE_RL_PIPELINE_TAG
+        # like the repo URL does, so bumping it no longer requires editing
+        # this file. The default preserves the previous behaviour.
+        - AWARE_RL_PIPELINE_TAG=${AWARE_RL_PIPELINE_TAG:-v0.2.2}
         # Override at the command line, in your .env, or in a CI secret.
         # Example: AWARE_RL_PIPELINE_REPO=https://git.internal/rl-pipeline.git
         - AWARE_RL_PIPELINE_REPO=${AWARE_RL_PIPELINE_REPO:?AWARE_RL_PIPELINE_REPO must be set (SEC-007/008, privacy scrub [date-redacted])}
@@ -199,6 +251,12 @@ services:
       - LLM_API_KEY=${LLM_API_KEY:-}
       - MINIMAX_API_KEY=${MINIMAX_API_KEY:-}
       - PROVIDER_API_HOST=${PROVIDER_API_HOST:-}
+      # 2026-11-10 (scribe): the provider model was previously hard-coded
+      # to 'MiniMax-M3' inside the pinned rl-pipeline dependency and could
+      # only be changed by republishing that library. rl-pipeline's client
+      # already honours options.model; AWARE now passes it through, and
+      # this env var selects it. MiniMax-M3.1-Flash is the default.
+      - AWARE_PROVIDER_MODEL=${AWARE_PROVIDER_MODEL:-MiniMax-M3.1-Flash}
       # [date-redacted]: OLLAMA_URL re-enabled and pointed at the host's
       # macOS Ollama daemon. The container-side default of 127.0.0.1:11434
       # points at the container's own loopback (no ollama runs there);
@@ -288,6 +346,8 @@ services:
       # path via its own (read-only) mount so the /api/audit/* API
       # surfaces real decisions.
       - aware-2-audit-data:/data/audit
+      # Compliance state volume, shared read-write with the gateway.
+      - aware-2-compliance-data:/data/compliance
     depends_on:
       postgres:
         condition: service_healthy
@@ -424,7 +484,11 @@ services:
       dockerfile: Dockerfile.coordinator
       network: host
       args:
-        - AWARE_RL_PIPELINE_TAG=v0.2.2
+        # 2026-11-10 (scribe): was hardcoded v0.2.2. The pin is operator
+        # config, not build policy - it now comes from AWARE_RL_PIPELINE_TAG
+        # like the repo URL does, so bumping it no longer requires editing
+        # this file. The default preserves the previous behaviour.
+        - AWARE_RL_PIPELINE_TAG=${AWARE_RL_PIPELINE_TAG:-v0.2.2}
         - AWARE_RL_PIPELINE_REPO=${AWARE_RL_PIPELINE_REPO:?AWARE_RL_PIPELINE_REPO must be set (SEC-007/008, privacy scrub [date-redacted])}
     # [date-redacted]: bumped to 0.4.5-phase4-rl-pipeline-from-internal-git.
     # rl-pipeline is now cloned from your internal git server in the
@@ -497,6 +561,37 @@ services:
     # No healthcheck — the trainer is a poller, not a request-serving
     # service. liveness is verified by checking the container is up
     # + the trainer's process is alive (via docker ps / docker stats).
+
+  # ─── UI (React control plane) ─────────────────────────────────────────
+  # 2026-11-10 (scribe): the compliance UI had no running deployment in
+  # the v2 stack. It pointed at http://localhost:8080/api — a port held by
+  # an unrelated process on this host — and the v1 aware-frontend /
+  # aware-backend containers were not running. Every API call failed and
+  # the container substituted hardcoded mock scores (89/72/65/34/65),
+  # which the UI rendered as live compliance figures.
+  #
+  # The UI is served by nginx on the aware-2 network and proxies /api to
+  # the v2 gateway, which serves /api/compliance and /api/audit. The
+  # React app's API base is same-origin relative ('/api'), so no
+  # cross-origin configuration is needed.
+  aware-2-ui:
+    build:
+      # Context is src/ui, not the repo root: src/ui/Dockerfile.ui copies
+      # build/ and nginx.conf, both of which live under src/ui. With the
+      # root as context those COPY paths resolve to /build and /nginx.conf
+      # at the image root and the build fails with
+      #   'failed to calculate checksum ... "/build": not found'.
+      context: ./src/ui
+      dockerfile: Dockerfile.ui
+    container_name: aware-2-ui
+    ports:
+      - "${AWARE_UI_PORT:-8081}:8080"
+    depends_on:
+      gateway:
+        condition: service_healthy
+    networks:
+      - aware-2
+    restart: unless-stopped
 
   # ─── Optional: live bring-up probe (development only) ──────
   # Use: docker compose -f docker-compose.coordinator.yml -p aware-2 --profile test up bring-up-probe

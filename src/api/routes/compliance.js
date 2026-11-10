@@ -51,9 +51,30 @@ const {
 // decision-logger.logDecision(). The classifier consumes `mcp_message`
 // source events produced by src/coordinator/adapters/mcp.js (the MCP
 // JSON-RPC adapter).
-const {
-  createMCP10Classifier
-} = require('../../compliance/mcp-top10-classifier');
+//
+// 2026-11-10 (scribe): this require was unconditional, and the module
+// does not exist in the repository — src/compliance/mcp-top10-classifier.js
+// was never written (three other files reference it as pending work:
+// mcp-top10-catalog.js:17, framework-mapper.js:646, mcp-governance-catalog.js:289).
+// A top-level require of a missing module throws at load time, which took
+// down the ENTIRE compliance router — and therefore the v1 APIGateway
+// (src/api/index.js:257 mounts this router), which is why the v1
+// aware-backend container could not start.
+//
+// The require is now tolerant: if the classifier is absent, the router
+// still loads and every other route works. Only /mcp-top10 degrades, and
+// it degrades to the same shape it already returns for a cold chain.
+let createMCP10Classifier = null;
+let mcp10ClassifierLoadError = null;
+try {
+  ({ createMCP10Classifier } = require('../../compliance/mcp-top10-classifier'));
+} catch (err) {
+  mcp10ClassifierLoadError = err.message;
+  console.error(
+    '[compliance] mcp-top10-classifier unavailable; /api/compliance/mcp-top10 ' +
+    'will report an empty annotation set. Reason: ' + err.message
+  );
+}
 
 const {
   getChainBetween
@@ -809,12 +830,20 @@ router.get('/mcp-top10', async (req, res) => {
     // MCP09 the allowlist is operator-managed and lives at a separate
     // config surface. Future: wire `req.query.allowlist` through here
     // when the operator-facing config route lands.
-    let classifier;
-    try {
-      classifier = createMCP10Classifier({ enableWrites: false });
-    } catch (err) {
-      console.error('Failed to construct MCP10Classifier:', err);
-      return res.status(500).json({ error: 'INTERNAL_ERROR' });
+    //
+    // 2026-11-10 (scribe): the classifier module does not exist in the
+    // repo (see the tolerant require above). When it is absent, the read
+    // path is unaffected — it reads annotations straight from the chain —
+    // so report the empty set rather than a 500. The classifier was only
+    // ever a structural no-op here (`void classifier`).
+    let classifier = null;
+    if (createMCP10Classifier) {
+      try {
+        classifier = createMCP10Classifier({ enableWrites: false });
+      } catch (err) {
+        console.error('Failed to construct MCP10Classifier:', err);
+        return res.status(500).json({ error: 'INTERNAL_ERROR' });
+      }
     }
     void classifier; // structure-only; we read annotations from the chain directly.
 

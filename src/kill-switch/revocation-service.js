@@ -25,12 +25,30 @@ class RevocationService extends EventEmitter {
     this.stateMachine = deps.stateMachine;
     this.registry = deps.registry;
     this.config = deps.config || {};
+
+    // Wiring guard (t_8c8cbf64). The kill switch used to be constructed with
+    // `stateMachine: undefined, registry: undefined`, so initiateRevocation
+    // threw a TypeError on an undefined property and the route answered
+    // HTTP 500 - the kill switch was inert. A missing dependency is a
+    // CONFIGURATION error, not a crash: record what is missing and let every
+    // entry point answer with a structured failure instead.
+    this.missingDependencies = ['electionManager', 'stateMachine', 'registry']
+      .filter((dep) => !this[dep]);
     
     // Track pending revocations awaiting consensus
     this.pendingRevocations = new Map(); // idempotencyKey -> { entry, resolve, reject }
     
     // Track committed revocations for idempotency
     this.committedRevocations = new Set(); // ids of committed revocations
+  }
+
+  /**
+   * True when every dependency the revocation path needs is wired.
+   * The kill switch degrades to a structured error (not a crash) while this
+   * is false - see the constructor's wiring guard.
+   */
+  isReady() {
+    return this.missingDependencies.length === 0;
   }
 
   /**
@@ -43,6 +61,17 @@ class RevocationService extends EventEmitter {
    * @returns {Promise<{success: boolean, entry: RevocationEntry}>}
    */
   async initiateRevocation(agentId, reason, issuedBy) {
+    // Wiring guard: refuse cleanly instead of throwing on an undefined
+    // dependency (the t_8c8cbf64 failure mode).
+    if (!this.isReady()) {
+      return {
+        success: false,
+        error: 'NOT_CONFIGURED',
+        missing: this.missingDependencies,
+        message: `Kill switch is not wired: missing ${this.missingDependencies.join(', ')}`
+      };
+    }
+
     // C-02: Only leader can initiate revocations
     if (!this.electionManager.isLeader()) {
       const leaderId = this.electionManager.getLeader();
@@ -180,6 +209,17 @@ class RevocationService extends EventEmitter {
    * M-03: Revocation rollback
    */
   async reinstate(agentId, reason, issuedBy, originalRevocationId) {
+    // Wiring guard: refuse cleanly instead of throwing on an undefined
+    // dependency (the t_8c8cbf64 failure mode).
+    if (!this.isReady()) {
+      return {
+        success: false,
+        error: 'NOT_CONFIGURED',
+        missing: this.missingDependencies,
+        message: `Kill switch is not wired: missing ${this.missingDependencies.join(', ')}`
+      };
+    }
+
     if (!this.electionManager.isLeader()) {
       const leaderId = this.electionManager.getLeader();
       return {
@@ -223,6 +263,7 @@ class RevocationService extends EventEmitter {
    * Check if an agent is currently revoked
    */
   isRevoked(agentId) {
+    if (!this.registry) return false;
     return this.registry.isRevoked(agentId);
   }
 
@@ -232,7 +273,7 @@ class RevocationService extends EventEmitter {
   getRevocationStatus(agentId) {
     return {
       revoked: this.isRevoked(agentId),
-      revocationId: this.registry.getRevocationId(agentId)
+      revocationId: this.registry ? this.registry.getRevocationId(agentId) : null
     };
   }
 

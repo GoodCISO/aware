@@ -33,6 +33,21 @@ class PostureCalculator {
     this.gaps = new Map(); // gapId -> gap
     this.assessments = new Map(); // controlId -> assessment
     this.weights = config.weights || this.getDefaultWeights();
+
+    // 2026-11-10 (scribe): hydrate from the durable store so a restart
+    // does not reset the measured posture to zero. Assessments were
+    // in-memory only (this.assessments), so every restart lost them and
+    // every framework read 0 / CRITICAL regardless of what had actually
+    // been assessed.
+    try {
+      const persistence = require('./persistence');
+      const restored = persistence.applyAssessmentsTo(this);
+      if (restored > 0) {
+        console.log(`[posture-calculator] restored ${restored} assessment(s) from ${persistence.STATE_FILE}`);
+      }
+    } catch (err) {
+      console.error('[posture-calculator] failed to restore assessments:', err.message);
+    }
   }
 
   /**
@@ -56,6 +71,21 @@ class PostureCalculator {
    */
   recordAssessment(controlId, frameworkId, assessment) {
     const key = `${frameworkId}:${controlId}`;
+
+    // 2026-11-10 (scribe): write through to the durable store. The
+    // in-memory Map is the cache; the file is the record.
+    try {
+      require('./persistence').recordAssessment({
+        frameworkId,
+        controlId,
+        status: assessment.status,
+        evidence: assessment.evidence,
+        notes: assessment.notes,
+        assessedBy: assessment.assessedBy,
+      });
+    } catch (err) {
+      console.error('[posture-calculator] failed to persist assessment:', err.message);
+    }
 
     this.assessments.set(key, {
       controlId,

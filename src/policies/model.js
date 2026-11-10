@@ -2,8 +2,24 @@
 // Policy Model — Schema definitions for per-agent sandbox policies
 // Phase 1.2: Per-Agent Sandbox Policies
 
-const { AgentState } = require('../api/models/Agent');
 const crypto = require('crypto');
+
+// 2026-11-10 (scribe): the `AgentState` import was DEAD — this module
+// never referenced it (grep count was 1: the import line itself).
+// It was not harmless: `api/models/Agent.js` calls process.exit(1) at
+// MODULE LOAD when neither AWARE_CREDENTIAL_PEPPER nor SECRET_KEY is set,
+// so requiring it from the policy schema meant the whole gateway booted,
+// bound its port, and then died — crashing the container on every restart
+// with:
+//
+//   FATAL: Either AWARE_CREDENTIAL_PEPPER or SECRET_KEY must be set
+//
+// The require chain was: src/gateway/server.js -> compliance/evidence-
+// collector.js -> policies/store.js -> policies/model.js -> api/models/
+// Agent.js.
+//
+// The gateway does NOT need the agent credential model, so the dead import
+// is removed rather than papered over with a secret in the compose file.
 
 /**
  * Policy action types

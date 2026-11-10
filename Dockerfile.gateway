@@ -80,6 +80,15 @@ ENV NODE_ENV=production \
     AWARE_GATEWAY_KILL_SWITCH=0 \
     GATEWAY_PROXY_TIMEOUT_MS=120000
 
+# 2026-11-10 (scribe): pre-create the compliance-state directory and
+# chown it to `aware`, mirroring Dockerfile.coordinator's
+# `RUN mkdir -p /data/awareness-pairs && mkdir -p /data/audit && chown -R aware:aware /data`.
+# Docker creates a fresh named volume from the image's directory contents
+# with those OWNERSHIP, so without this the volume mounts root-owned and
+# the gateway (which runs as uid 100 'aware') cannot write to it —
+# "touch: /data/compliance/.wtest: Permission denied".
+RUN mkdir -p /data/compliance && chown -R aware:aware /data
+
 USER aware
 
 EXPOSE 18080

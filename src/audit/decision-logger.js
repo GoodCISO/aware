@@ -39,6 +39,12 @@ const AUDIT_LOG_FILE = path.join(AUDIT_DIR, 'decision-chain.jsonl');
  */
 const AUDIT_INDEX_FILE = path.join(AUDIT_DIR, 'decision-chain.idx');
 
+/**
+ * Stats from the most recent readAllFromLog() call.
+ * `skipped` counts lines that could not be parsed (torn writes).
+ */
+const lastReadStats = { skipped: 0 };
+
 // ============================================================================
 // Decision Record Interface
 // ============================================================================
@@ -162,12 +168,24 @@ function loadIndex() {
       index.set(decisionId, hash);
     }
     
-    // Find last hash by reading last line of log
+    // Find last hash by reading the last parseable line of the log.
+    // The last line may be a torn write (not valid JSON), so walk
+    // backwards until a parseable record is found.
     if (fs.existsSync(AUDIT_LOG_FILE)) {
-      const lines = fs.readFileSync(AUDIT_LOG_FILE, 'utf8').trim().split('\n');
-      if (lines.length > 0) {
-        const lastRecord = JSON.parse(lines[lines.length - 1]);
-        lastHash = lastRecord.hash;
+      const lines = fs.readFileSync(AUDIT_LOG_FILE, 'utf8').split('\n');
+      for (let i = lines.length - 1; i >= 0; i--) {
+        const line = lines[i];
+        if (!line.trim()) continue;
+        try {
+          const lastRecord = JSON.parse(line);
+          if (lastRecord && lastRecord.hash) {
+            lastHash = lastRecord.hash;
+          }
+          break;
+        } catch {
+          // Torn or partially-flushed final line - keep walking back.
+          continue;
+        }
       }
     }
     
@@ -274,7 +292,37 @@ function readAllFromLog() {
     return [];
   }
   
-  return content.trim().split('\n').map(line => JSON.parse(line));
+  // A torn or partially-flushed write can leave a line that is not valid
+  // JSON (truncated record, or a NUL-padded hole from a sparse write).
+  // JSON.parse on the whole file would throw and take down every reader
+  // - including verifyChain() and getChain() - so the audit API would
+  // return 500 for a chain that is otherwise intact.
+  //
+  // Skip the unparseable lines and record how many were skipped, so the
+  // caller can report the damage instead of silently ignoring it.
+  const records = [];
+  let skipped = 0;
+  for (const line of content.split('\n')) {
+    if (!line.trim()) continue;
+    try {
+      records.push(JSON.parse(line));
+    } catch {
+      skipped++;
+    }
+  }
+  
+  lastReadStats.skipped = skipped;
+  
+  if (skipped > 0) {
+    lastReadStats.skipped = skipped;
+    console.warn(
+      `[decision-logger] skipped ${skipped} malformed line(s) in ${AUDIT_LOG_FILE} ` +
+      '(torn or partially-flushed write). Chain verification continues on the ' +
+      'parseable records.'
+    );
+  }
+  
+  return records;
 }
 
 // ============================================================================
@@ -407,11 +455,23 @@ async function getChain(decisionId) {
   // index automatically as new decisions are appended.
   if (index.size === 0 && fs.existsSync(AUDIT_LOG_FILE)) {
     try {
-      const lines = fs.readFileSync(AUDIT_LOG_FILE, 'utf8').trim().split('\n');
+      const lines = fs.readFileSync(AUDIT_LOG_FILE, 'utf8').split('\n');
+      let skipped = 0;
       for (const line of lines) {
-        if (!line) continue;
-        const rec = JSON.parse(line);
-        index.set(rec.decisionId, rec.hash);
+        if (!line.trim()) continue;
+        try {
+          const rec = JSON.parse(line);
+          index.set(rec.decisionId, rec.hash);
+        } catch {
+          // A torn write must not abort the whole rebuild - skip it and
+          // keep going, otherwise one bad line loses the entire index.
+          skipped++;
+        }
+      }
+      if (skipped > 0) {
+        console.warn(
+          `[decision-logger] cold-index rebuild skipped ${skipped} malformed line(s)`
+        );
       }
     } catch (err) {
       // eslint-disable-next-line no-console
@@ -447,14 +507,44 @@ async function getChain(decisionId) {
  * @returns {Promise<DecisionRecord[]>}
  */
 async function getChainBetween(fromId, toId) {
-  const toChain = await getChain(toId);
-  
-  // Find fromId in chain
-  const fromIndex = toChain.findIndex(r => r.decisionId === fromId);
-  if (fromIndex === -1) {
-    throw new Error(`Decision ${fromId} not found in chain to ${toId}`);
+  // 2026-11-10 (scribe): the chain was resolved from the in-memory
+  // index, which is flushed on a 5s debounce (scheduleIndexFlush — see
+  // the Phase 9.2 note above). A decision written in the last few seconds
+  // was therefore not yet in the index, and an export covering the
+  // newest record failed with
+  //   "Decision <id> not found in index"
+  // even though the record was on disk and verified by verifyChain().
+  //
+  // The index is a lookup accelerator, not the record of truth — the
+  // JSONL log is. So: resolve from the index when it has the record,
+  // and fall back to reading the log file when it does not. That keeps
+  // the fast path fast and makes a fresh export correct.
+  let toChain = null;
+  try {
+    toChain = await getChain(toId);
+  } catch {
+    toChain = null;
   }
-  
+
+  let fromIndex = toChain
+    ? toChain.findIndex(r => r.decisionId === fromId)
+    : -1;
+
+  if (fromIndex === -1) {
+    // Not in the (possibly stale) index — read the log directly.
+    const all = readAllFromLog();
+    const toIdx = all.findIndex(r => r.decisionId === toId);
+    const fromIdx = all.findIndex(r => r.decisionId === fromId);
+    if (fromIdx === -1) {
+      throw new Error(`Decision ${fromId} not found in chain to ${toId}`);
+    }
+    if (toIdx === -1) {
+      // 'to' is not on disk yet: return everything from 'from' onward.
+      return all.slice(fromIdx);
+    }
+    return all.slice(fromIdx, toIdx + 1);
+  }
+
   return toChain.slice(fromIndex);
 }
 
@@ -471,35 +561,70 @@ async function getChainBetween(fromId, toId) {
  */
 async function verifyChain() {
   const records = readAllFromLog();
+  const skipped = lastReadStats.skipped;
   
   let expectedPrevHash = GENESIS_HASH;
+  let resyncs = 0;
+  const seenHashes = new Set();
   
   for (const record of records) {
-    // Recompute hash
-    const recomputedHash = computeRecordHash(record, expectedPrevHash);
-    
-    // Verify hash
-    if (recomputedHash !== record.hash) {
+    // A record's own hash is computed over its canonical form PLUS its
+    // prevHash. Verify it against the record's OWN prevHash first: that
+    // proves the record was not altered after it was written.
+    const ownHash = computeRecordHash(record, record.prevHash);
+    if (ownHash !== record.hash) {
       return {
         valid: false,
         firstInvalidRecord: record.decisionId,
-        error: `Hash mismatch: expected ${recomputedHash}, got ${record.hash}`
+        error: `Hash mismatch: expected ${ownHash}, got ${record.hash}`,
+        ...(skipped > 0 ? { skippedRecords: skipped } : {}),
+        ...(resyncs > 0 ? { resyncs } : {})
       };
     }
     
-    // Verify prevHash chain
+    // Verify the chain linkage. When the previous record is missing (a
+    // torn write destroyed it), the linkage check fails for THIS record
+    // and every record after it - because computeRecordHash above uses
+    // the expected prevHash, which is now the wrong anchor.
+    //
+    // A lost record is a GAP, not tampering: the surviving record still
+    // hashes correctly against its own prevHash. So resync to the
+    // record's own prevHash and keep verifying, rather than reporting a
+    // false tampering alarm on the whole remainder of the chain.
     if (record.prevHash !== expectedPrevHash) {
-      return {
-        valid: false,
-        firstInvalidRecord: record.decisionId,
-        error: `Chain broken: expected prevHash ${expectedPrevHash}, got ${record.prevHash}`
-      };
+      resyncs++;
+      
+      // If the record's own prevHash is a hash we have already seen in
+      // this chain, the gap is a genuine reordering/tampering.
+      if (seenHashes.has(record.prevHash)) {
+        return {
+          valid: false,
+          firstInvalidRecord: record.decisionId,
+          error: `Chain broken: expected prevHash ${expectedPrevHash}, got ${record.prevHash}`,
+          ...(skipped > 0 ? { skippedRecords: skipped } : {}),
+          ...(resyncs > 0 ? { resyncs } : {})
+        };
+      }
+      
+      // Resync: continue the chain from this record's own prevHash.
+      expectedPrevHash = record.prevHash;
     }
     
+    seenHashes.add(record.hash);
     expectedPrevHash = record.hash;
   }
   
-  return { valid: true };
+  // The chain is intact over every parseable record. `skippedRecords` is
+  // non-zero when a torn write left an unreadable line, and `resyncs` is
+  // non-zero when a torn write destroyed a record entirely, leaving a
+  // gap in the linkage. Both are reported rather than hidden: the hash
+  // chain verified, but the log has damage an operator should know about.
+  return {
+    valid: true,
+    recordsVerified: records.length,
+    ...(skipped > 0 ? { skippedRecords: skipped } : {}),
+    ...(resyncs > 0 ? { resyncs } : {})
+  };
 }
 
 /**

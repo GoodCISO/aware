@@ -13,14 +13,25 @@ class ElectionManager {
     this.state = 'follower'; // 'follower', 'candidate', 'leader'
     this.currentTerm = 0;
     this.votedFor = null;
-    this.log = [];
-    this.commitIndex = 0;
-    this.lastApplied = 0;
+    // Raft log ownership (t_8c8cbf64).
+    // When a StateMachine is injected, this instance DELEGATES its log,
+    // commitIndex and term to it, so a node has exactly ONE Raft log. The
+    // kill-switch path (RevocationService) appends revocation entries
+    // through the StateMachine and reads commitIndex back from it; a second
+    // private log here would disagree with the StateMachine about what is
+    // committed. Without an injected StateMachine the instance keeps its
+    // own (empty) fields, exactly as before.
+    this.stateMachine = config.stateMachine || null;
+    this._log = [];
+    this._commitIndex = 0;
+    this._lastApplied = 0;
+    this._term = 0;
     this.nextIndex = {};
     this.matchIndex = {};
     this.leaderId = null;
     this.timeout = null;
     this.electionTimeout = null;
+    this.heartbeatTimeout = null;
     
     // Initialize nextIndex and matchIndex for each node
     this.nodes.forEach(nodeId => {
@@ -32,6 +43,33 @@ class ElectionManager {
     ElectionManager.registry[this.nodeId] = this;
     
     this.startElectionTimer();
+  }
+
+  // Raft log / term accessors. These are getters (not plain fields) because
+  // the StateMachine owns the log when one is injected - see the comment in
+  // the constructor.
+  get log() {
+    return this.stateMachine ? this.stateMachine.log : this._log;
+  }
+
+  get commitIndex() {
+    return this.stateMachine ? this.stateMachine.commitIndex : this._commitIndex;
+  }
+
+  get lastApplied() {
+    return this.stateMachine ? this.stateMachine.lastApplied : this._lastApplied;
+  }
+
+  get currentTerm() {
+    return this.stateMachine ? this.stateMachine.term : this._term;
+  }
+
+  set currentTerm(term) {
+    if (this.stateMachine) {
+      this.stateMachine.term = term;
+    } else {
+      this._term = term;
+    }
   }
 
   // Start the election timer (randomized timeout to prevent conflicts)
@@ -55,6 +93,7 @@ class ElectionManager {
     console.log(`Node ${this.nodeId} starting election for term ${this.currentTerm + 1}`);
     
     this.state = 'candidate';
+    this.syncStateMachineRole('candidate');
     this.currentTerm++;
     this.votedFor = this.nodeId;
     let votes = 1; // Vote for self
@@ -125,6 +164,7 @@ class ElectionManager {
     
     this.state = 'leader';
     this.leaderId = this.nodeId;
+    this.syncStateMachineRole('leader');
     
     // Initialize nextIndex and matchIndex for each node
     this.nodes.forEach(nodeId => {
@@ -152,7 +192,7 @@ class ElectionManager {
     });
     
     // Schedule next heartbeat in 100ms
-    setTimeout(() => {
+    this.heartbeatTimeout = setTimeout(() => {
       this.sendHeartbeats();
     }, 100);
   }

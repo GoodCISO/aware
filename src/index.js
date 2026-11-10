@@ -1,6 +1,7 @@
 // src/index.js
 const NodeDiscovery = require('./node-discovery');
 const ElectionManager = require('./election');
+const StateMachine = require('./election/state-machine');
 const APIGateway = require('./api');
 const { resolveSecretKey } = require('./engine-secret.js');
 
@@ -29,6 +30,7 @@ class AWAREEngine {
     
     this.nodeDiscovery = null;
     this.electionManager = null;
+    this.stateMachine = null;
     this.apiGateway = null;
   }
 
@@ -42,17 +44,24 @@ class AWAREEngine {
       broadcastPort: this.config.broadcastPort
     });
     
+    // Initialize the shared Raft log (t_8c8cbf64). The election manager and
+    // the kill switch must append to the SAME log, so it is created here and
+    // handed to both.
+    this.stateMachine = new StateMachine(this.config.nodeId);
+
     // Initialize election manager
     this.electionManager = new ElectionManager(
       this.config.nodeId,
-      { nodes: this.config.nodes }
+      { nodes: this.config.nodes, stateMachine: this.stateMachine }
     );
     
     // Initialize API gateway
     this.apiGateway = new APIGateway({
       port: this.config.apiPort,
+      nodeId: this.config.nodeId,
       nodeDiscovery: this.nodeDiscovery,
       electionManager: this.electionManager,
+      stateMachine: this.stateMachine,
       secretKey: this.config.secretKey
     });
     
@@ -78,7 +87,10 @@ class AWAREEngine {
     }
     
     if (this.electionManager) {
-      // Election manager doesn't need explicit shutdown
+      // Stop the election timer so the process can exit cleanly.
+      if (typeof this.electionManager.stop === 'function') {
+        this.electionManager.stop();
+      }
     }
     
     console.log('AWARE Engine shutdown complete');

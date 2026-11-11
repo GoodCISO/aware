@@ -2,6 +2,26 @@
 
 All notable changes to AWARE Evolution are documented here.
 
+## [2.12.2] — 2026-11-11 — README capability claims corrected to match the source
+
+**Release type:** patch. Documentation only. No runtime behaviour change for a correctly deployed stack, and no figure or coverage number changed. This release corrects claims that the published `README.md` — which ships in the npm tarball and is served from the public GitHub README — asserted but the source does not support.
+
+### Fixed
+
+- **"Revocation cascades automatically … kill the parent, the children go too" was false.** `src/kill-switch/revocation-service.js:168` applies a revocation to exactly one agent (`registry.revoke(entry.agentId, ...)`). The blast-radius logic in `src/agents/revocation-cache.js` (`_applyBlastRadius()`) applies a penalty factor to that same agent rather than traversing to children, and a search of the whole `src/` tree for "cascade" returns one unrelated comment in `src/policies/tool-observation-proxy.js`. `RevocationService` is constructed in `src/api/index.js:48` ("pending Raft setup"), not in the running gateway. Cascade to derived agents is **specified, not implemented**; the README now says so.
+- **"The tiers are defined in `src/server.js`" pointed readers at a demo fixture.** `src/server.js` injects `mockAgents` ("Add mock agents to make the demo richer") and hardcodes the tier table with `enforced: true` literals. It is not the `npm start` entrypoint (`node src/api/index.js`) and nothing requires it. Enforcement is implemented in `src/policies/engine.js` (per-tool-call evaluation, `ALLOW`/`DENY`/`AUDIT`/`NO_POLICY`, `DEFAULT_DECISION = DENY`), wired into the running server at `/api/policies` and `/api/policies/hot`. The README now names the correct file and marks `src/server.js` as a fixture.
+- **"Pheromone-based routing" overstated the shipped implementation.** The pheromone trail in the shipped code is the blast-radius penalty applied when an agent is revoked; the router that would steer work by trail strength (`src/routing/pheromone-router.js`) is built but is not wired into a runtime path. The README now says "pheromone-trail scoring" and states the gap.
+- **A feature list belonging to another paper was presented as AWARE's own differentiation.** The bullets under the AMRO-S section (arXiv:2603.12933) describe AMRO-S, not AWARE. The README now carries an explicit note to that effect.
+
+### Changed
+
+- `scripts/collect-runtime-evidence.sh` — the default `AWARE_COORDINATOR_URL` was `http://127.0.0.1:38181`, but `docker-compose.coordinator.yml` maps `18081:8080`. The default is now `http://127.0.0.1:18081`. This script is **not** in the npm `files` whitelist and does not ship in the tarball; the change is for operator deployments running the script from the repository.
+
+### Notes
+
+- Published as `@goodciso/aware@2.12.2` through `scripts/publish-guard.mjs`, which packs from a clean detached worktree at the release tag and refuses to publish a tarball that differs from it. The 18 untagged files present in the working tree (in-progress ADRs, `src/compliance/mcp-governance-catalog.js`, `src/trainer/security-sensitive-diff.js`, `src/coordinator/http-server.js.bak` and others) remain unpublished, as intended.
+- The GitHub release for `v2.12.1` was never cut and its tag was never pushed to a remote, so the GitHub and npm channels disagreed about which version was "latest". `v2.12.2` is cut on both channels, and the corrected README is pushed to the public branch.
+
 ## [2.12.1] — 2026-11-10 — npm public-boundary leak closed; MCP Top 10 coverage completed to 10/10
 
 **Release type:** patch. No runtime behaviour change for a correctly deployed stack. This release repairs the **npm publication channel**, which shipped 27 files that no release had reviewed, and corrects an overstated coverage claim.

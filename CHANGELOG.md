@@ -2,6 +2,53 @@
 
 All notable changes to AWARE Evolution are documented here.
 
+## [2.12.2] — 2026-11-11 — README capability claims corrected to match the source
+
+**Release type:** patch. Documentation only. No runtime behaviour change for a correctly deployed stack, and no figure or coverage number changed. This release corrects claims that the published `README.md` — which ships in the npm tarball and is served from the public GitHub README — asserted but the source does not support.
+
+### Fixed
+
+- **"Revocation cascades automatically … kill the parent, the children go too" was false.** `src/kill-switch/revocation-service.js:168` applies a revocation to exactly one agent (`registry.revoke(entry.agentId, ...)`). The blast-radius logic in `src/agents/revocation-cache.js` (`_applyBlastRadius()`) applies a penalty factor to that same agent rather than traversing to children, and a search of the whole `src/` tree for "cascade" returns one unrelated comment in `src/policies/tool-observation-proxy.js`. `RevocationService` is constructed in `src/api/index.js:48` ("pending Raft setup"), not in the running gateway. Cascade to derived agents is **specified, not implemented**; the README now says so.
+- **"The tiers are defined in `src/server.js`" pointed readers at a demo fixture.** `src/server.js` injects `mockAgents` ("Add mock agents to make the demo richer") and hardcodes the tier table with `enforced: true` literals. It is not the `npm start` entrypoint (`node src/api/index.js`) and nothing requires it. Enforcement is implemented in `src/policies/engine.js` (per-tool-call evaluation, `ALLOW`/`DENY`/`AUDIT`/`NO_POLICY`, `DEFAULT_DECISION = DENY`), wired into the running server at `/api/policies` and `/api/policies/hot`. The README now names the correct file and marks `src/server.js` as a fixture.
+- **"Pheromone-based routing" overstated the shipped implementation.** The pheromone trail in the shipped code is the blast-radius penalty applied when an agent is revoked; the router that would steer work by trail strength (`src/routing/pheromone-router.js`) is built but is not wired into a runtime path. The README now says "pheromone-trail scoring" and states the gap.
+- **A feature list belonging to another paper was presented as AWARE's own differentiation.** The bullets under the AMRO-S section (arXiv:2603.12933) describe AMRO-S, not AWARE. The README now carries an explicit note to that effect.
+
+### Changed
+
+- `scripts/collect-runtime-evidence.sh` — the default `AWARE_COORDINATOR_URL` was `http://127.0.0.1:38181`, but `docker-compose.coordinator.yml` maps `18081:8080`. The default is now `http://127.0.0.1:18081`. This script is **not** in the npm `files` whitelist and does not ship in the tarball; the change is for operator deployments running the script from the repository.
+
+### Notes
+
+- Published as `@goodciso/aware@2.12.2` through `scripts/publish-guard.mjs`, which packs from a clean detached worktree at the release tag and refuses to publish a tarball that differs from it. The 18 untagged files present in the working tree (in-progress ADRs, `src/compliance/mcp-governance-catalog.js`, `src/trainer/security-sensitive-diff.js`, `src/coordinator/http-server.js.bak` and others) remain unpublished, as intended.
+- The GitHub release for `v2.12.1` was never cut and its tag was never pushed to a remote, so the GitHub and npm channels disagreed about which version was "latest". `v2.12.2` is cut on both channels, and the corrected README is pushed to the public branch.
+
+## [2.12.1] — 2026-11-10 — npm public-boundary leak closed; MCP Top 10 coverage completed to 10/10
+
+**Release type:** patch. No runtime behaviour change for a correctly deployed stack. This release repairs the **npm publication channel**, which shipped 27 files that no release had reviewed, and corrects an overstated coverage claim.
+
+### Fixed
+
+- **The npm tarball shipped 27 files that were never committed or tagged.** `npm publish` had been run from the repository working tree rather than from a clean checkout of the release tag. npm packs the working tree, so untracked and unstaged files were published to the public registry alongside the release. The published `@goodciso/aware@2.12.0` tarball contained 212 files; the `v2.12.0` tag contains 185 publishable files. The 27 extra files included `docs/investor/AI-SEED-FUND-PITCH.md`, `docs/investor/AWARE-Pitch-Deck.pptx`, `docs/investor/aware-pitch-deck.pdf`, `docs/investor/aware-pitch-deck.html`, `docs/investor/CSA-AGM-2026-SPEAKER-SUBMISSION.md`, `src/coordinator/http-server.js.bak`, `src/compliance/mcp-governance-catalog.js`, `src/trainer/security-sensitive-diff.js`, and 19 more. **No credential was in any of them** — a secret scan against the published tarball returned zero matches for API keys, bearer tokens, private keys, cloud keys, or connection strings. The defect is not a secret leak; it is that npm published a tree that no release had ever reviewed, which breaks the tag-as-source-of-truth guarantee. The GitHub release tarball for the same tag was clean (425 files, tag-based) — only the npm channel was affected.
+- **`package.json` shipped every `docs/` subdirectory.** The `files` whitelist contained `"docs/"`, which expands to any subdirectory present in the working tree at pack time — including `docs/investor/`, `docs/research/` and `docs/design/`. The whitelist is now an explicit enumeration of the publishable document tree (`docs/adr/`, `docs/compliance/`, `docs/security/`, `docs/config.md`, `docs/openapi.yaml`, `docs/rlm.md`), so a future document directory cannot be published by accident.
+- **The MCP Top 10 coverage claim was overstated.** The v2.12.0 release notes said "8 rules covering 8 of the 10 OWASP MCP Top 10 classes" and named MCP06 and MCP07 as uncovered — but MCP08 was uncovered too, and was not mentioned. Three classes in the catalogue (`MCP06` Context Window & Memory Poisoning, `MCP07` Supply Chain, `MCP08` Authentication & Identity) had no rule, so no annotation for them could ever be produced.
+
+### Added
+
+- **`scripts/publish-guard.mjs`** — the durable control that prevents recurrence. It builds a clean detached worktree at the release tag, packs from *there*, and refuses to publish if any packed file is absent from the tag or differs from it byte-for-byte. The `--audit-worktree` mode reproduces the original mistake as a dry run and reports exactly which untagged files a working-tree publish would ship. Verified against `v2.12.0`: it lists the offending files and exits 1.
+- **Three MCP Top 10 classifier rules** closing the coverage gap — `unprovenanced-context-write` (MCP06: a write into working memory with no provenance field), `unpinned-plugin-install` (MCP07: an MCP server or plugin installed with no content-hash, digest or publisher-key pin), and `unbound-audience-credential` (MCP08: a credential presented without an audience binding, so it is replayable across servers). Each rule fires only on the failure shape and stays silent when the corresponding control is working.
+- **A coverage test that pins the gap closed.** `every catalogue class is reachable from at least one rule` fails if any of the ten OWASP MCP Top 10 classes ever becomes unreachable from the rule table again.
+
+### Changed
+
+- `.npmignore` gained the second lock on the same door: `docs/investor/`, `docs/research/`, `docs/design/`, `docs/private/`, and the `*.bak` / `*.orig` / `*.swp` family. The `files` whitelist remains the primary control; `.npmignore` is defence in depth.
+
+### Notes
+
+- **Version 2.12.0 on npm is withdrawn.** The leaked 2.12.0 was published at 2026-11-10T18:39:01Z and is being unpublished in favour of 2.12.1, whose tarball matches the tag exactly. Anyone who installed `@goodciso/aware@2.12.0` should move to 2.12.1; the runtime code in the two releases is identical apart from the publish guard and the three classifier rules.
+- The MCP classifier suite is now **26 tests, all passing** (up from 14).
+- No runtime or API change. A correctly deployed stack behaves identically on 2.12.0 and 2.12.1.
+- Not included in this release, and not published: `src/compliance/mcp-governance-catalog.js`, `src/trainer/security-sensitive-diff.js`, `docs/investor/`, `docs/research/`, `docs/design/` and their tests — untracked work that is deliberately excluded from every release.
+
 ## [2.12.0] — 2026-11-10 — Compliance engine becomes persistent and auditable; MCP Top 10 classifier shipped; provider model made configurable
 
 **Release type:** minor. New capability (MCP Top 10 classification, durable compliance state, failure-path auditing) plus four defect fixes that each disabled a documented control.

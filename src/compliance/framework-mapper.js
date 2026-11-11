@@ -190,7 +190,7 @@ const FRAMEWORKS = {
     // claim ISO/IEC 42001:2023 certification.
     //
     // Per ADR-055 §D3, per-entry `awareness: 'mapped' | 'partial' | 'gap'`
-    // marks the 13 / 16 / 9 breakdown (research §6.1). A.6.2.8 (event logs)
+    // marks the 13 / 19 / 6 breakdown (research §6.1). A.6.2.8 (event logs)
     // is the canonical load-bearing mapping — surfaced via the audit chain
     // that compliance-mapping, anomaly-detection, and kill-switch ride.
     ISO_42001: {
@@ -660,7 +660,7 @@ class FrameworkMapper {
     // Per ADR-055 §D3 the entry shape is { name, description, awareness,
     // awareComponents, crosswalkConfidence, ismsRef, clause }. We expose
     // awareness + awareComponents + crosswalkConfidence so the compliance
-    // report can render the 13/16/9 breakdown and operators can drill
+    // report can render the 13/19/6 breakdown and operators can drill
     // from a control back to AWARE components.
     if (frameworkId === 'ISO_42001') {
       for (const [ctrlId, ctrl] of Object.entries(framework.controls || {})) {

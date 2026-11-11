@@ -22,11 +22,13 @@ AWARE is different. It's infrastructure that makes compliance happen on its own:
 
 - Every agent gets a **cryptographic identity** it can't fake
 - Every action is **evaluated against policy before it executes**
-- **Revocation cascades automatically** when an agent is compromised — kill the parent, the children go too
+- **Revocation invalidates credentials** — the agent's state flips, its credentials stop verifying, and the decision is written to the audit trail. (Revocation applies to the named agent; cascade to derived agents is specified but not yet implemented.)
 - **Full audit trails build themselves** — every decision, every context access, every escalation
 - **(v2)** Every preference-pair disagreement becomes **DPO training data** — the system improves itself from real production traffic
 
-AWARE implements **T0–T4 constraint levels** — five enforcement tiers every agent is defined on before it's allowed to act. Agents self-enforce the constraint level you assign. The tiers are defined in `src/server.js` and surfaced in `src/ui/src/components/ConstraintEnforcementView.js`:
+AWARE implements **T0–T4 constraint levels** — five enforcement tiers every agent is defined on before it's allowed to act. Agents self-enforce the constraint level you assign. **Enforcement is implemented in `src/policies/engine.js`** (per-tool-call evaluation, `ALLOW`/`DENY`/`AUDIT`/`NO_POLICY`, `DEFAULT_DECISION = DENY`) and is wired into the running server at `/api/policies` and `/api/policies/hot` (`src/api/index.js`, the `npm start` entrypoint). The tiers are surfaced in `src/ui/src/components/ConstraintEnforcementView.js`.
+
+> ⚠️ **`src/server.js` is a demo fixture, not the product.** It injects `mockAgents` ("Add mock agents to make the demo richer") and hardcodes the tier table with `enforced: true` literals. It is not the `npm start` entrypoint and nothing requires it. **Do not use it to verify the T0–T4 claim** — read `src/policies/engine.js`.
 
 - **T0 — Audit Trail.** Every action is logged. Foundational, always on.
 - **T1 — Crypto Identity.** Every agent gets a non-human identity it can't fake. Foundational, always on.
@@ -34,7 +36,7 @@ AWARE implements **T0–T4 constraint levels** — five enforcement tiers every 
 - **T3 — Policy-Driven.** Advanced governance — full policy enforcement, including rate limits and decision routing.
 - **T4 — Autonomous.** Full self-operation under declared constraints.
 
-**Core thesis:** Bio-inspired coordination algorithms are the right primitive for autonomous agent orchestration and compliance. Pheromone-based routing, distributed consensus, and self-healing topologies translate directly to agent governance.
+**Core thesis:** Bio-inspired coordination algorithms are the right primitive for autonomous agent orchestration and compliance. Pheromone-trail scoring and distributed consensus translate directly to agent governance. The pheromone trail is implemented — revoking an agent applies a blast-radius penalty to its trail; the pheromone router that would steer work by trail strength is built but not yet wired into a runtime path.
 
 ---
 
@@ -280,8 +282,8 @@ AWARE/
 |--------|---------|------------------------|
 | Vanta / Drata | Compliance software | They automate checklists. AWARE automates agent governance. Different problem. |
 | Microsoft Agent 365 | Agent identity | Bio-inspired coordination at core, not bolted on. Open source. |
-| Okta Agent Gateway | Agent access | Distributed kill switch via Raft consensus — not centralised. |
-| Galileo Agent Control | Open runtime | Pheromone routing + autonomous compliance mapping on top. |
+| Okta Agent Gateway | Agent access | Kill switch via a Raft-consensus revocation path — not a centralised session kill. |
+| Galileo Agent Control | Open runtime | Pheromone-trail blast-radius penalty + autonomous compliance mapping on top. |
 
 **Plus v2:** the self-improving DPO loop means the system gets better the more you use it, without the operator shipping new model versions manually.
 
@@ -295,5 +297,7 @@ AWARE/
 - Task-specific pheromone specialists prevent cross-task interference
 - Quality-gated evolution reinforces only high-quality routing trajectories
 - **4.7x speedup** over existing multi-agent routing with better accuracy
+
+*Those bullets describe AMRO-S, not AWARE. AWARE does not implement pheromone-based path selection: the pheromone trail in the shipped code is the blast-radius penalty applied when an agent is revoked, and the router that would steer work by trail strength (`src/routing/pheromone-router.js`) is built but not yet wired into a runtime path.*
 
 What AMRO-S does NOT address (AWARE's differentiation): security heuristics, identity governance, kill switches, compliance mapping, blast radius containment. And in v2: preference-pair collection, DPO self-training, and the evaluation harness that closes the loop.

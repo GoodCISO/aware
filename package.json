@@ -21,6 +21,7 @@
     "src/data/users.json.template",
     "src/data/agents.json.template",
     "src/db/",
+    "src/disclosure/",
     "src/election/",
     "src/emergency/",
     "src/engine-secret.js",

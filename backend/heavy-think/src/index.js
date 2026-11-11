@@ -30,6 +30,7 @@ import { defaultKForTaskType, K_CONFIGS } from './config.js';
  * @returns {Promise<{
  *   refined_trace: string,
  *   confidence: number,
+ *   refined_prm_score: number|null,   // judge score of the refined trace
  *   attempts: Array<{ reasoning: string, prm_score: number, selected: boolean }>,
  *   verification: { passed: boolean, method: string, details?: any, duration_ms: number },
  *   cost: { attempts_usd: number, refinement_usd: number, judge_usd: number },
@@ -111,6 +112,49 @@ export async function heavy_think(options) {
     problem, best_attempt: bestInitial.reasoning, task_type, context, client, system_prompt,
   });
 
+  // 4b. JUDGE-SCORE THE REFINED TRACE — the SAME instrument that scored
+  //     the initial attempts.
+  //
+  // src/prm.js documents K+1 PRM calls per heavy_think call (K attempts + 1
+  // for the refinement); that call was never actually made, and the
+  // refinement's score was faked with a length heuristic instead. The
+  // trainer's `min_score_gap` gate then subtracted a heuristic value
+  // (capped at 0.75) from a judge value (routinely 0.8-1.0), so the gap
+  // was systematically negative and better-refined pairs were dropped as
+  // "PRM-inverted" (kanban t_99423c45).
+  //
+  // If the judge call fails we do NOT fall back to a heuristic: the pair is
+  // written with prm_score=null and prm_score_source='unavailable', and the
+  // trainer's existing missing-scores policy drops it. A missing score is
+  // honest; a fake score silently corrupts the training set.
+  let refinedJudge = null;
+  try {
+    if (cache) {
+      const key = cache.buildCacheKey({
+        problem, reasoning: refinement.refined_trace, task_type, context,
+        prm_model: client?.model || 'minimax-M3',
+      });
+      const hit = await cache.getCachedScore(key);
+      if (hit) {
+        cacheStats.hits++;
+        refinedJudge = { ...hit, cost_usd: 0 };  // cached reads have zero PRM cost
+      } else {
+        cacheStats.misses++;
+        refinedJudge = await scoreWithPRM({
+          problem, reasoning: refinement.refined_trace, task_type, context, prmConfig, client,
+        });
+        cache.putCachedScore(key, refinedJudge).catch(() => { /* ignore */ });
+      }
+    } else {
+      refinedJudge = await scoreWithPRM({
+        problem, reasoning: refinement.refined_trace, task_type, context, prmConfig, client,
+      });
+    }
+  } catch (err) {
+    refinedJudge = null;
+  }
+  const refinedJudgeCost = refinedJudge?.cost_usd || 0;
+
   // 5. VERIFICATION (optional)
   let verificationResult = { passed: true, method: 'none', duration_ms: 0 };
   if (verification) {
@@ -131,8 +175,21 @@ export async function heavy_think(options) {
           ts: new Date().toISOString(),
           problem,
           task_type,
-          chosen: { reasoning: refinement.refined_trace, prm_score: refinement.refined_score },
-          rejected: { reasoning: bestInitial.reasoning, prm_score: bestInitial.prm_score },
+          chosen: {
+            reasoning: refinement.refined_trace,
+            // Judge-sourced — the SAME instrument as `rejected.prm_score`.
+            prm_score: refinedJudge ? refinedJudge.score : null,
+            prm_score_source: refinedJudge ? 'prm_judge' : 'unavailable',
+            // The refinement's own confidence (provider-reported, or the
+            // legacy length heuristic). NOT a PRM score — never compare it
+            // against a judge score.
+            refinement_confidence: refinement.refinement_confidence,
+          },
+          rejected: {
+            reasoning: bestInitial.reasoning,
+            prm_score: bestInitial.prm_score,
+            prm_score_source: 'prm_judge',
+          },
           all_attempts: attemptsWithSelection.map(a => ({
             reasoning: a.reasoning,
             prm_score: a.prm_score,
@@ -146,7 +203,7 @@ export async function heavy_think(options) {
           cost: {
             attempts_usd: parallelResult.cost_usd || 0,
             refinement_usd: refinement.cost_usd || 0,
-            judge_usd: scored.reduce((s, a) => s + (a.prm_meta?.cost_usd || 0), 0),
+            judge_usd: scored.reduce((s, a) => s + (a.prm_meta?.cost_usd || 0), 0) + refinedJudgeCost,
           },
         },
         contentHash,
@@ -159,12 +216,14 @@ export async function heavy_think(options) {
   return {
     refined_trace: refinement.refined_trace,
     confidence: refinement.confidence,
+    // Judge score of the refined trace (null when the judge call failed).
+    refined_prm_score: refinedJudge ? refinedJudge.score : null,
     attempts: attemptsWithSelection,
     verification: verificationResult,
     cost: {
       attempts_usd: parallelResult.cost_usd || 0,
       refinement_usd: refinement.cost_usd || 0,
-      judge_usd: scored.reduce((s, a) => s + (a.prm_meta?.cost_usd || 0), 0),
+      judge_usd: scored.reduce((s, a) => s + (a.prm_meta?.cost_usd || 0), 0) + refinedJudgeCost,
     },
     pair_written,
     pair_path: pairPath,        // absolute path to the JSONL line, or null if not written

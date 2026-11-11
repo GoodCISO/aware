@@ -23,6 +23,15 @@
 //                        Same gate as rl-pipeline's toDpoDataset()'s
 //                        minScoreGap, exposed at the filter level so
 //                        operators can tune it without code changes.
+//                        **Added 2026-11-11 (kanban t_99423c45): the gap
+//                        is only meaningful when BOTH sides were produced
+//                        by the same instrument.** A pair whose chosen
+//                        side carries a non-judge score (the legacy
+//                        length heuristic, or any other surrogate) is
+//                        dropped as 'min_score_gap:mixed_instruments'
+//                        rather than being silently scored against a
+//                        judge value. See the score-instrument contract
+//                        in backend/heavy-think/src/refine.js.
 //   - "tag_match"      — drop records whose task_type is NOT in
 //                        options.allowedTaskTypes. Useful for keeping
 //                        only math/reasoning pairs and dropping
@@ -90,6 +99,47 @@
  */
 
 const VALID_RULES = new Set(['noop', 'min_score_gap', 'tag_match', 'azr_result']);
+
+// Score-instrument parity (2026-11-11, kanban t_99423c45).
+//
+// `chosen.prm_score` and `rejected.prm_score` are only comparable when they
+// came from the same instrument. The producer (rl-pipeline / heavy-think)
+// used to write a LENGTH HEURISTIC into `chosen.prm_score` while
+// `rejected.prm_score` was a real PRM-judge score. The heuristic is capped
+// at 0.75 and the judge routinely returns 0.8-1.0, so the gap was
+// systematically negative and this gate's directionality check dropped
+// BETTER-refined pairs as "PRM-inverted" — 74,840 of 329,558 live pairs
+// (39.9%), of which 69,287 were exactly the chosen=0.75-heuristic-ceiling
+// vs rejected>0.75-judge case.
+//
+// The producer now writes `prm_score_source` on each side so the two are
+// self-describing. A pair with MISMATCHED instruments is dropped with an
+// explicit reason instead of being scored across instruments.
+const LEGACY_HEURISTIC_BUCKETS = new Set([0.4, 0.5, 0.6, 0.75]);
+
+/**
+ * Classify the scoring instrument behind one side of a preference pair.
+ *
+ * @param {Object} side — `chosen` or `rejected` of a preference record
+ * @returns {string} the instrument name, or 'unknown' when untagged
+ *   (untagged = a legacy record written before `prm_score_source` existed)
+ */
+function scoreInstrument(side) {
+  const source = side?.prm_score_source;
+  return typeof source === 'string' ? source : 'unknown';
+}
+
+// The exact value set the legacy length heuristic could emit. Kept as a
+// named constant so the legacy-signature check above cannot drift from the
+// heuristic it is detecting.
+
+/**
+ * @param {number} score
+ * @returns {boolean} true when `score` is one of the legacy heuristic buckets
+ */
+function isLegacyHeuristicBucket(score) {
+  return LEGACY_HEURISTIC_BUCKETS.has(score);
+}
 
 /**
  * Apply a filter rule to an array of preference records.
@@ -192,6 +242,34 @@ function _applyRule(rule, rec, options) {
       // debug log so operators can decide whether to re-score.
       if (typeof chosenScore !== 'number' || typeof rejectedScore !== 'number') {
         return { action: 'drop', reason: 'min_score_gap:missing_prm_scores' };
+      }
+      // Instrument parity (2026-11-11, kanban t_99423c45). A gap between a
+      // surrogate score and a judge score is not a quality signal — it is an
+      // artefact of the two sides being measured with different rulers.
+      // Compare only same-instrument pairs; drop the rest explicitly so the
+      // operator can see them instead of having them silently vanish into a
+      // bogus "inverted" verdict.
+      const chosenInstrument = scoreInstrument(rec.chosen);
+      const rejectedInstrument = scoreInstrument(rec.rejected);
+      if (chosenInstrument !== rejectedInstrument) {
+        return {
+          action: 'drop',
+          reason: `min_score_gap:mixed_instruments:${chosenInstrument}_vs_${rejectedInstrument}`,
+        };
+      }
+      // Both sides untagged: the record predates `prm_score_source`. Its
+      // `chosen.prm_score` may be the legacy length heuristic. We cannot
+      // tell, so we do not guess — but we CAN detect the exact legacy
+      // signature: the heuristic only ever emits 0.4 / 0.5 / 0.6 / 0.75.
+      // A chosen side sitting on one of those buckets while the rejected
+      // side sits on any other value is a heuristic-vs-judge pair.
+      if (chosenInstrument === 'unknown' && rejectedInstrument === 'unknown') {
+        if (isLegacyHeuristicBucket(chosenScore) && !isLegacyHeuristicBucket(rejectedScore)) {
+          return {
+            action: 'drop',
+            reason: 'min_score_gap:mixed_instruments:legacy_heuristic_vs_judge',
+          };
+        }
       }
       // Function default raised 2026-06-22 (ADR (internal) Repair 1) from
       // 0.05 to 0.20 to match the config default in src/config/index.cjs.

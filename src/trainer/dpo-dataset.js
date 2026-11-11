@@ -37,6 +37,47 @@
 
 const SUPPORTED_FORMATS = new Set(['messages']);
 
+// Score-instrument parity (2026-11-11, kanban t_99423c45).
+//
+// The producer writes `prm_score_source` on each side of a preference pair
+// so the two are self-describing. Untagged sides predate that field; for
+// those we fall back to the legacy heuristic-signature check (the old
+// length heuristic only ever emitted 0.4 / 0.5 / 0.6 / 0.75).
+const JUDGE_SCORE_SOURCE = 'prm_judge';
+const LEGACY_HEURISTIC_BUCKETS = new Set([0.4, 0.5, 0.6, 0.75]);
+
+/**
+ * @param {number} score
+ * @returns {boolean} true when `score` is one of the legacy heuristic buckets
+ */
+function isLegacyHeuristicBucket(score) {
+  return LEGACY_HEURISTIC_BUCKETS.has(score);
+}
+
+/**
+ * True when both sides of a pair carry scores produced by the same
+ * instrument, and therefore their difference is meaningful.
+ *
+ * @param {Object} chosen
+ * @param {Object} rejected
+ * @returns {boolean}
+ */
+export function sameScoreInstrument(chosen, rejected) {
+  const chosenSource = chosen?.prm_score_source;
+  const rejectedSource = rejected?.prm_score_source;
+  if (typeof chosenSource === 'string' || typeof rejectedSource === 'string') {
+    return chosenSource === rejectedSource;
+  }
+  // Both untagged — legacy record. Detect the exact legacy signature:
+  // chosen on a heuristic bucket while rejected is on any other value.
+  const cs = chosen?.prm_score;
+  const rs = rejected?.prm_score;
+  if (typeof cs === 'number' && typeof rs === 'number') {
+    if (isLegacyHeuristicBucket(cs) && !isLegacyHeuristicBucket(rs)) return false;
+  }
+  return true;
+}
+
 /**
  * @typedef {Object} PreferenceRecord
  * @property {string} problem
@@ -64,6 +105,8 @@ const SUPPORTED_FORMATS = new Set(['messages']);
  * @property {number} lowGap
  * @property {number} duplicate
  * @property {number} invalid
+ * @property {number} mixedInstrument — pairs whose two sides carry scores
+ *           from different instruments (the gap would be meaningless)
  */
 
 /**
@@ -97,7 +140,7 @@ export function toDpoDataset(records, options = {}) {
   const dedupeByHash = options.dedupeByHash !== false; // default true
 
   const rows = [];
-  const skipped = { lowGap: 0, duplicate: 0, invalid: 0 };
+  const skipped = { lowGap: 0, duplicate: 0, invalid: 0, mixedInstrument: 0 };
   const seenHashes = new Set();
 
   for (const rec of records) {
@@ -113,11 +156,18 @@ export function toDpoDataset(records, options = {}) {
     }
     const chosenScore = rec?.chosen?.prm_score;
     const rejectedScore = rec?.rejected?.prm_score;
-    // minScoreGap filter (matches rl-pipeline's toDpoDataset convention
-    // from the original Status.md spec). Records with missing scores
-    // pass this gate — the operator's outcome-filter.js handles the
-    // "missing scores" policy separately (see ADR (internal) Repair 1).
+    // Instrument parity (2026-11-11, kanban t_99423c45). The gap below is
+    // only a preference signal when both sides were produced by the SAME
+    // instrument. A surrogate (e.g. the legacy length heuristic) scored
+    // against a judge score yields a bogus gap — the exact defect that
+    // dropped better-refined pairs as "inverted" (74,840 of 329,558 live
+    // pairs). Skip such pairs here too, so the rule holds even when the
+    // operator runs the outcome filter with rule='noop'.
     if (typeof chosenScore === 'number' && typeof rejectedScore === 'number') {
+      if (!sameScoreInstrument(rec.chosen, rec.rejected)) {
+        skipped.mixedInstrument += 1;
+        continue;
+      }
       const gap = chosenScore - rejectedScore;
       if (gap + 1e-9 < minScoreGap) {
         skipped.lowGap += 1;

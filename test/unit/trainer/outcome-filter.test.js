@@ -136,8 +136,8 @@ test('outcome-filter: min_score_gap directionality check — drops pairs where c
   // chosen/rejected on hedging-vs-hallucination. The directionality
   // check catches these as a hard negative regardless of magnitude.
   const inverted = makeRecord({
-    chosen: { reasoning: 'A', prm_score: 0.75 },
-    rejected: { reasoning: 'B', prm_score: 0.80 },
+    chosen: { reasoning: 'A', prm_score: 0.75, prm_score_source: 'prm_judge' },
+    rejected: { reasoning: 'B', prm_score: 0.80, prm_score_source: 'prm_judge' },
   });
   const result = filterOutcomePairs([inverted], { rule: 'min_score_gap' });
   assert.equal(result.dropped.length, 1);
@@ -163,10 +163,18 @@ test('outcome-filter: min_score_gap directionality check — catches ADR (intern
   // Reproduction of the exact inversion pattern from
   // /data/awareness-pairs/2026-06-22.jsonl pair 0:
   // "What is AWARE 2.0?" → chosen=0.75, rejected=0.80, gap=-0.05
+  //
+  // 2026-11-11 (kanban t_99423c45): both sides are tagged judge-sourced.
+  // The fixture previously used an untagged chosen=0.75 — which is the
+  // legacy LENGTH HEURISTIC bucket, not a judge score — so this test was
+  // asserting the behaviour of the very defect this card fixes (a
+  // heuristic-vs-judge pair scored as if both were judge scores). The
+  // directionality check itself is unchanged; only the fixture's score
+  // source is now explicit.
   const rec = makeRecord({
     problem: 'What is AWARE 2.0?',
-    chosen: { reasoning: 'hedged answer', prm_score: 0.75 },
-    rejected: { reasoning: 'confident answer', prm_score: 0.80 },
+    chosen: { reasoning: 'hedged answer', prm_score: 0.75, prm_score_source: 'prm_judge' },
+    rejected: { reasoning: 'confident answer', prm_score: 0.80, prm_score_source: 'prm_judge' },
   });
   const result = filterOutcomePairs([rec], { rule: 'min_score_gap', minGap: 0.20 });
   assert.equal(result.dropped.length, 1);
@@ -176,10 +184,15 @@ test('outcome-filter: min_score_gap directionality check — catches ADR (intern
 test('outcome-filter: min_score_gap directionality check — catches ADR (internal) production pair 1 (gap=-0.40)', () => {
   // Reproduction of pair 1 from the same file:
   // "Reply with hello" → chosen=0.60, rejected=1.00, gap=-0.40
+  //
+  // 2026-11-11 (kanban t_99423c45): both sides tagged judge-sourced — the
+  // untagged chosen=0.60 was a legacy heuristic bucket, so this fixture
+  // was reproducing the mixed-instrument defect rather than a genuinely
+  // inverted judge-scored pair.
   const rec = makeRecord({
     problem: 'Reply with the single word: hello',
-    chosen: { reasoning: 'some answer', prm_score: 0.60 },
-    rejected: { reasoning: 'hello', prm_score: 1.00 },
+    chosen: { reasoning: 'some answer', prm_score: 0.60, prm_score_source: 'prm_judge' },
+    rejected: { reasoning: 'hello', prm_score: 1.00, prm_score_source: 'prm_judge' },
   });
   const result = filterOutcomePairs([rec], { rule: 'min_score_gap', minGap: 0.20 });
   assert.equal(result.dropped.length, 1);

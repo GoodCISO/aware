@@ -29,6 +29,18 @@ const KEYWORD_PATTERNS = {
     'function', 'class', 'module', 'api', 'endpoint',
     'code', 'script', 'algorithm', 'database', 'query'
   ],
+  // NOTES_TO_REVIEWER is checked BEFORE RESEARCH on purpose: keyword
+  // matching is case-insensitive substring, and RESEARCH owns the word
+  // 'review'. Reviewer-note phrases ("reviewer notes", "flag for
+  // review") all contain the substring "review" or "reviewer" and would
+  // otherwise match RESEARCH first. We rely on NOTES_TO_REVIEWER's
+  // compound phrases being more specific than RESEARCH's single-word
+  // 'review' — and on the loop visiting NOTES_TO_REVIEWER first.
+  [TaskCategory.NOTES_TO_REVIEWER]: [
+    'notes to reviewer', 'reviewer notes',
+    'editorial notes', 'feedback notes', 'reviewer feedback',
+    'leave a note', 'flag for review', 'note for reviewer'
+  ],
   [TaskCategory.RESEARCH]: [
     'research', 'find', 'analyse', 'investigate', 'compare',
     'review', 'survey', 'explore', 'evaluate', 'assess',
@@ -47,6 +59,15 @@ const KEYWORD_PATTERNS = {
   [TaskCategory.COORDINATION]: [
     'orchestrate', 'coordinate', 'delegate', 'route', 'schedule',
     'assign', 'dispatch', 'manage', 'organise', 'allocate'
+  ],
+  [TaskCategory.DISCLAIMER_PILING]: [
+    // t_9881cd1d: stacked/over-redundant disclaimer content detection.
+    // Keywords target the failure mode (piling/repetition) and the surface
+    // artefact (disclaimers, safety notes, "as an AI" preambles).
+    'disclaimer', 'disclaimers', 'disclaim', 'safety notice', 'safety notes',
+    'as an ai', 'as a language model', 'i cannot', 'i am unable',
+    'redundant', 'over-redundant', 'stacked', 'repetitive', 'piling',
+    'caveat', 'caveats', 'warning text', 'preamble', 'hedging'
   ],
   // GENERAL has no keywords — default fallback
 };
@@ -130,7 +151,9 @@ function getCategoryPriority(category) {
     [TaskCategory.CODE_GENERATION]: 80,
     [TaskCategory.DATA_ANALYSIS]: 60,
     [TaskCategory.RESEARCH]: 40,
+    [TaskCategory.NOTES_TO_REVIEWER]: 30,  // Above COORDINATION — reviewer intent outranks routing intent
     [TaskCategory.COORDINATION]: 20,
+    [TaskCategory.DISCLAIMER_PILING]: 25,  // t_9881cd1d: between COORDINATION and RESEARCH — content-quality, but not security-critical
     [TaskCategory.GENERAL]: 0           // Lowest — default
   };
   return priorities[category] ?? 0;

@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "AWARE 2.0 RLM configuration",
-  "description": "Declarative config for invoking the RLM (Recursive Language Model) primitive inside AWARE. Read by src/config/rlm.cjs at boot (planned). Validated by the A1.1 bring-up smoke test. Defaults live in config/rlm.yaml; prose lives in docs/rlm.md. BLOCK-13 fix (A1.1.2, 2026-06-28 ~13:40 UTC): 6 field groups added (rlm.context, rlm.forwardedOptions, rlm.decompositionScope, rlm.audit.preferencePair, top-level errors, rlm.sandbox.envMode); additionalProperties:false added at all object levels so unknown fields are rejected at the schema layer (defense-in-depth, complements the C1 runtime hook that catches the same issues at boot).",
+  "description": "Declarative config for invoking the RLM (Recursive Language Model) primitive inside AWARE. Read by src/config/rlm.cjs at boot (implemented 2026-11-11, t_0ff3a7b9; the loader also enforces a verification-method guard that the schema enum alone cannot express). Validated by the A1.1 bring-up smoke test. Defaults live in config/rlm.yaml; prose lives in docs/rlm.md. BLOCK-13 fix (A1.1.2, 2026-06-28 ~13:40 UTC): 6 field groups added (rlm.context, rlm.forwardedOptions, rlm.decompositionScope, rlm.audit.preferencePair, top-level errors, rlm.sandbox.envMode); additionalProperties:false added at all object levels so unknown fields are rejected at the schema layer (defense-in-depth, complements the C1 runtime hook that catches the same issues at boot).",
   "type": "object",
   "additionalProperties": false,
   "required": ["rlm", "errors"],

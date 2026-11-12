@@ -58,6 +58,7 @@ RUN npm install --omit=dev
 # Copy the AWARE source (coordinator service + the shared config module)
 COPY src/coordinator ./src/coordinator
 COPY src/config/index.cjs ./src/config/index.cjs
+COPY src/config/rlm.cjs ./src/config/rlm.cjs
 COPY src/db ./src/db
 COPY src/budget ./src/budget
 COPY src/trainer ./src/trainer
@@ -81,6 +82,8 @@ COPY db ./db
 # in-image copy is the fallback that makes the default case work.
 # See docs/audits/aware-2.0-trainer-env-audit-2026-06-13.md BLOCKER-1.
 COPY config/modal-training.json ./config/modal-training.json
+COPY config/rlm.yaml ./config/rlm.yaml
+COPY config/rlm.schema.json ./config/rlm.schema.json
 
 # ─── Stage 2: runtime ─────────────────────────────────────────────
 FROM node:22-alpine AS runtime
@@ -119,6 +122,8 @@ RUN mkdir -p /data/awareness-pairs && mkdir -p /data/audit && chown -R aware:awa
 # to a readable file when WORKDIR=/app. See
 # docs/audits/aware-2.0-trainer-env-audit-2026-06-13.md BLOCKER-1.
 COPY --from=build --chown=aware:aware /build/config/modal-training.json /app/config/modal-training.json
+COPY --from=build --chown=aware:aware /build/config/rlm.yaml /app/config/rlm.yaml
+COPY --from=build --chown=aware:aware /build/config/rlm.schema.json /app/config/rlm.schema.json
 # Symlink so the coordinator's static `../../../../src/rl-pipeline/` import
 # (which resolves to `/src/rl-pipeline/` from /app/) finds the source at
 # /app/rl-pipeline/. This matches the dev layout where `../../../../` from

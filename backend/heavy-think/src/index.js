@@ -158,8 +158,12 @@ export async function heavy_think(options) {
   // 5. VERIFICATION (optional)
   let verificationResult = { passed: true, method: 'none', duration_ms: 0 };
   if (verification) {
+    // `client` and `problem` are forwarded so LLM-based verification methods
+    // (e.g. 'llm-judge') can run. `client` is the judge itself; `problem` gives
+    // the judge the task the trace was produced for — without it the judge can
+    // only assess internal consistency, not correctness against the task.
     verificationResult = await verify({
-      trace: refinement.refined_trace, verification, context,
+      trace: refinement.refined_trace, verification, context, client, problem,
     });
   }
 

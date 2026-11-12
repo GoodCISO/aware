@@ -21,6 +21,7 @@ import http from 'node:http';
 import { randomUUID, timingSafeEqual, createHash } from 'node:crypto';
 import { coordinate, buildDefaultRouter, COORDINATOR_VERSION, COORDINATOR_BUILD_PHASE } from './index.js';
 import config from '../config/index.cjs';
+import rlmConfig from '../config/rlm.cjs';
 import { logConversationFireAndCodert } from '../db/logger.js';
 import { runMigrations } from '../db/index.js';
 import { checkBudget, getBudgetStatus, isEnabled as isBudgetEnabled } from '../budget/watchdog.js';
@@ -119,6 +120,25 @@ function isAuthorizedCoordinatorRequest(req) {
 // or AWARE_REQUEST_TIMEOUT_MS at runtime does not require a restart.
 // Validate at boot so bad env values fail fast, not on first request.
 config.validate();
+
+// RLM configuration (config/rlm.yaml) is validated at boot too. This is
+// what turns the verification-method guard into a BOOT-TIME check: a
+// config naming a defaultMethod or allowedMethods entry that no
+// implementation can service is rejected here, at startup, with a message
+// naming the offending method and the set that does work — instead of
+// surfacing later as an opaque verification failure on every RLM leaf.
+//
+// An ABSENT config/rlm.yaml is not a boot failure: it means the RLM is
+// simply not configured on this deployment. rlmConfig.validate() returns
+// false in that case. An INVALID one throws.
+//
+// See src/config/rlm.cjs and AWARE card t_0ff3a7b9.
+if (rlmConfig.validate() !== false) {
+  for (const warning of rlmConfig.warnings()) {
+    // eslint-disable-next-line no-console
+    console.warn(`[aware-coordinator] rlm config: ${warning}`);
+  }
+}
 
 // Phase 2.1: run Postgres migrations on boot. Best-effort — if the DB is
 // unreachable, log a warning to stderr and continue. The logger itself is

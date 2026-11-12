@@ -1,39 +1,39 @@
 #!/usr/bin/env node
 // scripts/chain-depth-census.js
 //
-// ADR-079 — read-only population census for the `decisionChainDepth` metric.
+// ADR-080 — read-only population census for the `decisionChainDepth` metric.
 //
-// Design source: docs/adr/ADR-079-decision-chain-depth-metric.md
+// Design source: docs/adr/ADR-080-aware-decision-chain-depth-metric.md
 // (the architect's record for this decision; sections D2, D3, D4 and §6).
 //
 // WHAT THIS IS
 // ------------
-// A read-time derived metric over the audit chain (ADR-079 §D1). This script
+// A read-time derived metric over the audit chain (ADR-080 §D1). This script
 // is the ONLY consumer: it opens the chain file read-only, walks it once, and
 // prints a JSON population report to stdout. It emits nothing, writes nothing,
 // and starts nothing.
 //
-// ADR-079 §D4 makes this a script and not a service on purpose: no new
+// ADR-080 §D4 makes this a script and not a service on purpose: no new
 // endpoint, no new service, no new volume, no schema change, no baseline.
-// ADR-079 §D1 forbids adding `decisionChainDepth` to `MetricType` — this
+// ADR-080 §D1 forbids adding `decisionChainDepth` to `MetricType` — this
 // script does not touch `src/monitoring/metrics-collector.js`.
 //
 // WHAT IT MEASURES
 // ----------------
-// For a decision record `d` in the chain (ADR-079 §D2):
+// For a decision record `d` in the chain (ADR-080 §D2):
 //
 //   depth(d) = 0        when parentDecisionId is null  (a root)
 //   depth(d) = p.depth + 1  when the parent id is present in the map
 //   depth(d) = undefined    when the parent id is NOT in the map  ("dangling")
 //
 // A dangling record is NOT counted as a root. Doing so would understate the
-// chained share and hide a chain gap — the exact defect ADR-079 §6.3 calls out.
+// chained share and hide a chain gap — the exact defect ADR-080 §6.3 calls out.
 //
 // Parents precede children in append order (an annotation's parent is the
 // source event, logged earlier), so ONE forward pass with an `id -> depth`
 // map suffices; there is no recursion and no second pass.
 //
-// REPORTED NUMBERS (ADR-079 §D3)
+// REPORTED NUMBERS (ADR-080 §D3)
 // -------------------------------
 //   chainedShare — share of records with depth > 0
 //   depthP95     — 95th percentile over the RESOLVED (depth !== undefined) set
@@ -45,10 +45,10 @@
 // an empty arm. The share, the tail, and the dangling count each stay
 // interpretable when the arm is empty.
 //
-// FAILURE MODES (ADR-079 §6)
+// FAILURE MODES (ADR-080 §6)
 // ---------------------------
 //   §6.1 chain growth   — the `id -> depth` map is O(n) in the record count.
-//                          That is the cost ADR-079 §6.1 accepts for v1; the
+//                          That is the cost ADR-080 §6.1 accepts for v1; the
 //                          file is streamed line-by-line so the SCRIPT's own
 //                          footprint stays flat, but the map does grow. A
 //                          184 MB / 321k-record chain today, retained for
@@ -197,7 +197,7 @@
       try {
         rec = JSON.parse(line);
       } catch {
-        // ADR-079 §6.2: a torn write is counted and reported, never swallowed.
+        // ADR-080 §6.2: a torn write is counted and reported, never swallowed.
         malformedLines += 1;
         continue;
       }
@@ -223,7 +223,7 @@
         // Root.
         depth = 0;
       } else if (!depthById.has(parentId)) {
-        // ADR-079 §D2: the parent id is absent from the chain. The record's
+        // ADR-080 §D2: the parent id is absent from the chain. The record's
         // depth is undefined — NOT zero. Counting it as a root would
         // understate the chained share and hide the chain gap (§6.3).
         depth = undefined;
@@ -231,7 +231,7 @@
       } else {
         const parentDepth = depthById.get(parentId);
         // A parent that is present but itself unresolved (its own ancestor is
-        // missing) leaves this record unresolved too: ADR-079 §D2 says depth
+        // missing) leaves this record unresolved too: ADR-080 §D2 says depth
         // is undefined if ANY ancestor id is absent from the chain.
         depth = parentDepth === undefined ? undefined : parentDepth + 1;
       }
@@ -289,7 +289,7 @@
     chainFile: chainPath,
     recordsRead: records,
     // Records with NO defined depth: the direct orphans (`danglingCount`)
-    // plus every descendant of a broken chain. ADR-079 §D3 names only
+    // plus every descendant of a broken chain. ADR-080 §D3 names only
     // `danglingCount`; this second class is reported rather than dropped,
     // because silently dropping it is the under-reporting failure mode
     // §6.2 warns about.

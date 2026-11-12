@@ -1,6 +1,6 @@
 // test/unit/scripts/chain-depth-census.test.js
 //
-// ADR-079 — validates scripts/chain-depth-census.js.
+// ADR-080 — validates scripts/chain-depth-census.js.
 //
 // The census is a read-time derived metric over the audit chain. Its report
 // is the deliverable, so the tests assert the REPORT CONTRACT, not the
@@ -9,13 +9,13 @@
 //   1. A synthetic chain with a known shape (root -> child -> grandchild,
 //      plus a dangling child and a malformed line) produces the expected
 //      depthP95 / depthMax / danglingCount / malformedLines.
-//   2. A dangling parent is NOT counted as a root (ADR-079 §D2 / §6.3) —
+//   2. A dangling parent is NOT counted as a root (ADR-080 §D2 / §6.3) —
 //      counting it as a root is the specific defect the metric exists to
 //      avoid, because it understates the chained share.
-//   3. `malformedLines` is ALWAYS reported (ADR-079 §6.2) — never silently
+//   3. `malformedLines` is ALWAYS reported (ADR-080 §6.2) — never silently
 //      skipped.
-//   4. The report never contains a bare mean (ADR-079 §D3).
-//   5. The script is READ-ONLY (ADR-079 §6.4): the chain file's size and
+//   4. The report never contains a bare mean (ADR-080 §D3).
+//   5. The script is READ-ONLY (ADR-080 §6.4): the chain file's size and
 //      mtime are unchanged after a run, and the source contains no
 //      write-mode file call.
 //
@@ -118,7 +118,7 @@ test('synthetic chain with a known shape reports the expected depths', () => {
 
 // ── 2. A dangling parent is NOT a root ─────────────────────────────────
 //
-// ADR-079 §D2: "A dangling record must not be treated as a root: that would
+// ADR-080 §D2: "A dangling record must not be treated as a root: that would
 // understate the chained share and hide a chain gap." If the orphan were
 // scored as depth 0, it would land in the histogram as a root and the
 // chainedShare denominator/numerator would both shift. This test pins that
@@ -166,7 +166,7 @@ test('chainedShare counts only records with depth > 0', () => {
 
 // ── 4. malformedLines is always reported ────────────────────────────────
 //
-// ADR-079 §6.2: skipping unparseable lines under-reports the population.
+// ADR-080 §6.2: skipping unparseable lines under-reports the population.
 // A chain of ONLY malformed lines must still report a non-zero
 // malformedLines, not an empty population with no error signal.
 //
@@ -209,7 +209,7 @@ test('blank lines are skipped rather than counted as malformed', () => {
 
 // ── 6. No bare mean in the report ──────────────────────────────────────
 //
-// ADR-079 §D3: "A bare mean is prohibited in the first cut." The report
+// ADR-080 §D3: "A bare mean is prohibited in the first cut." The report
 // exposes chainedShare + depthP95 + depthMax + danglingCount and must not
 // carry a `mean`/`average` field.
 //
@@ -231,7 +231,7 @@ test('the report contains no bare mean field', () => {
   assert.ok('danglingCount' in report);
 });
 
-// ── 7. Read-only proof (ADR-079 §6.4) ──────────────────────────────────
+// ── 7. Read-only proof (ADR-080 §6.4) ──────────────────────────────────
 //
 // The chain file's size AND mtime must be unchanged after a run, and the
 // source must contain no write-mode file call.

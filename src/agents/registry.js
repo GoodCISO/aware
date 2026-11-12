@@ -254,7 +254,7 @@ class AgentRegistry {
       return { valid: false, error: 'Agent not found' };
     }
     
-    const isValid = agent.credentials.current === credential;
+    const isValid = agent.checkCredential(credential);
     
     return {
       valid: isValid && agent.state === AgentState.ACTIVE,

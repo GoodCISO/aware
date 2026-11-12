@@ -21,8 +21,21 @@
 
 set -euo pipefail
 
-# Locate the repo root (this script lives at <repo>/scripts/hooks/pre-commit)
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+# Locate the repo root.
+#
+# Resolve it from GIT, not from this script's own location. The hook file is
+# installed as a symlink into the COMMON .git/hooks directory, so
+# $(dirname "${BASH_SOURCE[0]}")/../.. resolves to the MAIN checkout even when
+# the commit is being made from a linked worktree - while git points
+# GIT_INDEX_FILE at the WORKTREE's index. The two disagree: `git ls-files`
+# lists the worktree's staged paths but `head -3 <path>` reads the main
+# checkout's file, so a brand-new ADR fails the H1 check with
+# "H1 / front matter does not contain '# ADR-NNN'" - a false positive that
+# blocks every new-ADR commit made from a worktree.
+#
+# `git rev-parse --show-toplevel` is correct in both cases: git runs hooks
+# with the working tree's top level as the cwd.
+REPO_ROOT="$(git rev-parse --show-toplevel)"
 cd "$REPO_ROOT"
 
 # 1) Authoritative content rules (A1 script — host paths, LAN IPs, fixture shape)

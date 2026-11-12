@@ -2,6 +2,49 @@
 
 All notable changes to AWARE Evolution are documented here.
 
+## [Unreleased] — disclosure record generator (C1)
+
+**This does not close the incident-disclosure gap.** It mechanises it at class granularity only.
+The Nadella coverage audit's "❌ ABSENT" marking on incident disclosure stays in every external
+description until specific-granularity (P-2) disclosure is reachable — which requires the C2
+runtime-behaviour snapshots (`S-POLICY` / `S-TOOLS` / `S-KILL`) to be recording. See ADR-079 §4.
+
+### Added
+
+- **`src/disclosure/disclosure-record.js` — the disclosure record generator (C1).** Binds a
+  `gap-tracker.js` gap and its `framework-mapper.js` control IDs to an `exportChain(fromId, toId)`
+  window. The record carries the window verbatim — each record's `prevHash` and `hash` — so a
+  recipient can **recompute** the hashes rather than trust AWARE's assertion. This is what makes it
+  disclosure rather than a press release.
+  - `verifyChainWindow(record)` recomputes every hash from the carried records and distinguishes
+    **hash mismatch** (a record was altered) from **chain break** (a record was removed or
+    reordered — a per-record hash check alone would not catch it).
+  - The window's anchor is **declared, not verified**: the first record's `prevHash` points outside
+    the window and is verifiable only when it is the genesis hash. `verifyFullChain()` is
+    re-exported for the recipient who has the log file.
+  - Canonicalisation is delegated to the shipped `canonicalSerialize()` rather than re-implemented,
+    because that function serialises a fixed field order and drops keys outside it; a generic
+    "sort the keys" re-implementation would disagree with the stored hash and fail on valid
+    records.
+- **`src/disclosure/index.js`** — the module's public API.
+- **`test/unit/disclosure/disclosure-record.test.js`** — 14 tests: the export→verify round trip
+  on a live chain, tamper detection, chain-break detection, control-class resolution by inversion
+  over the real framework mapper, and the granularity constraint.
+- **ADR-079 — AWARE Disclosure Record Generator (C1).**
+
+### The publication-granularity constraint
+
+The generator renders **P-0 (existence) and P-1 (class) only**. **P-2 (specific) is refused with
+an error, not downgraded** — a silent downgrade would let a caller believe it holds a specific
+diff while holding a class-level one. Every record carries `publication.statement` asserting
+non-closure on its face, so a record forwarded without its surrounding context still says what it
+is.
+
+Note on vocabulary: the publication-granularity ladder is `P-0/P-1/P-2` and the state-layer axis is
+`L-A/L-B/L-C` — two distinct axes that must not be conflated. Records also carry
+`publication.granularityLegacy` mapping `P-0→L-0`, `P-1→L-1`, matching the names the
+implementation cards use.
+
 ## [2.12.3] — 2026-11-12 — A revoked agent can be reinstated; `registry.verify()` compares correctly
 
 **Release type:** patch. Two runtime defects in agent lifecycle and credential verification are fixed. Both were found by a source audit of the decision-chain, identity and revocation controls, cross-checked against the deployed stack on 2026-11-12. One is live-reachable today; one is latent.

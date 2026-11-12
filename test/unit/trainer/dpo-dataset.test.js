@@ -30,7 +30,9 @@ function makeRecord(overrides = {}) {
 test('dpo-dataset: empty input returns empty rows, zero skipped', () => {
   const result = toDpoDataset([]);
   assert.deepEqual(result.rows, []);
-  assert.deepEqual(result.skipped, { lowGap: 0, duplicate: 0, invalid: 0 });
+  // mixedInstrument was added 2026-11-11 (kanban t_99423c45) alongside the
+  // score-instrument parity guard.
+  assert.deepEqual(result.skipped, { lowGap: 0, duplicate: 0, invalid: 0, mixedInstrument: 0 });
 });
 
 test('dpo-dataset: rejects unknown format with clear error', () => {
@@ -153,8 +155,8 @@ test('dpo-dataset: minScoreGap also drops inverted pairs (gap < 0)', () => {
   // these upstream. This test confirms dpo-dataset also catches them,
   // providing defense in depth.
   const inverted = makeRecord({
-    chosen: { reasoning: 'hedged', prm_score: 0.75 },
-    rejected: { reasoning: 'confident', prm_score: 0.80 },
+    chosen: { reasoning: 'hedged', prm_score: 0.75, prm_score_source: 'prm_judge' },
+    rejected: { reasoning: 'confident', prm_score: 0.80, prm_score_source: 'prm_judge' },
     _content_hash: 'h-inverted',
   });
   const result = toDpoDataset([inverted]);

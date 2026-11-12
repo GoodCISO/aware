@@ -609,7 +609,7 @@ export class TrainerPoller {
     return {
       rowsWritten: rows.length,
       rowsDropped: skipped.lowGap + skipped.duplicate + skipped.invalid +
-        filterResult.dropped.length,
+        skipped.mixedInstrument + filterResult.dropped.length,
       sourceFilesRead: pairPaths.length,
     };
   }

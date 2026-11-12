@@ -5,7 +5,7 @@
 **Reviewers:** reviewer (sign-off card `t_8ca293fd` — Critic review of ADR-080 + the renumber sweep)
 **Task:** `t_49fe6a7e` (design card; filed by scribe from the RLT spike verdict `t_47925aa7`)
 **Sibling card:** `t_7101e614` (RLT defer-watch registration) — a watchlist, independent of this record
-**Renumbered from:** ADR-079 — the original number was taken by `ADR-079-aware-disclosure-record-generator.md` (Forge, coder, 2026-11-11), which exists only on the **local `main` lineage** (introduced in `a85b0c0b`); `origin/main` carries no ADR-079 at all. Number never reused; the record keeps its content and gains the next free number. On `origin/main` the number 079 was in fact free, so the gate's filename-uniqueness rule would not itself have refused the original filename there — the collision exists on the local-main lineage, and reconciling the two lineages brings it into existence.
+**Renumbered from:** ADR-079 — the original number was taken by `ADR-079-aware-disclosure-record-generator.md` (Forge, coder, 2026-11-11), which exists only on the **local `main` lineage** (introduced in `a85b0c0b`); `origin/main` carries no ADR-079 at all. Number never reused; the record keeps its content and gains the next free number. On the reconciled lineage both records are present, and the pair is legal: `ADR-079` and `ADR-080` are each unique, so the filename-uniqueness rule in `scripts/pre-commit-check.sh` passes (verified: the gate exits 0 on the reconciled tree, and exits 1 when a second file claims `079`). On `origin/main` the number 079 was in fact free, so the gate's filename-uniqueness rule would not itself have refused the original filename there — the collision exists on the local-main lineage, and reconciling the two lineages brings it into existence.
 **Related:** `src/audit/decision-logger.js` (chain reader/writer) · `src/monitoring/metrics-collector.js` (metric-type enum) · `src/monitoring/baseline-service.js` (baseline gate) · `src/monitoring/anomaly-detector.js` (consumer) · `src/compliance/atlas-mapper.js`, `src/compliance/ast10-mapper.js`, `src/compliance/llm09-mapper.js`, `src/compliance/mcp-top10-classifier.js` (the four compliance mappers — the only non-null-parent producers that are *instantiated* in a deployed image) plus `src/coordinator/adapters/mcp.js:410` (producer-capable, not instantiated — see §3.1) · `src/policies/tool-observation-proxy.js` (the annotation gate)
 **Predecessor:** none — this is the first decision on audit-chain depth as an analytics quantity
 **Verified against:** AWARE `origin/main` @ `a78bd3d8` (measurement base). Re-verified on the reconciled lineage — see §9.1.
@@ -157,10 +157,10 @@ The census's own numbers are **a population baseline, not a proof of emptiness**
 
 | Citation | Before | After | Cited content |
 |---|---|---|---|
-| `src/coordinator/http-server.js:694` | `:694` | `:714` | `async function handleAuditLog(req, res, requestId) {` |
-| `src/coordinator/http-server.js:925` | `:925` | `:945` | `parentDecisionId: null,  // root of a chain per request; ...` |
+| `src/coordinator/http-server.js` | line 694 | line 714 | `async function handleAuditLog(req, res, requestId) {` |
+| `src/coordinator/http-server.js` | line 925 | line 945 | `parentDecisionId: null,  // root of a chain per request; ...` |
 
-The other 21 citations resolve to identical content after the reconciliation. Each cited line was compared by content, not by line number, and the 2 shifted citations were re-pointed to the lines that now hold the cited content.
+The other 21 citations resolve to identical content after the reconciliation. Each cited line was compared by content, not by line number, and the 2 shifted citations were re-pointed to the lines that now hold the cited content. The table above names the two sites by file and line WITHOUT the `file:line` form, so that the only `file:line` tokens in this record are the live citations.
 
 **§3.1 still holds.** The reconciliation adds `src/disclosure` to the repository, and it adds `src/config/rlm.cjs`. The coordinator image copies `src/coordinator`, `src/config`, `src/db`, `src/budget`, `src/trainer`, `src/audit` and `src/policies` only. The coordinator image therefore still carries no `compliance` module and no `monitoring` module, and the directory set that §3.1 names is unchanged.
 

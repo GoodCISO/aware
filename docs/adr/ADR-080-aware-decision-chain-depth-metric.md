@@ -2,7 +2,7 @@
 
 **Status:** Accepted (design) · **Date:** 2026-11-12
 **Author:** Archimedes (architect)
-**Reviewers:** reviewer (sign-off card `t_…` — filed with this commit)
+**Reviewers:** reviewer (sign-off card `t_8ca293fd` — Critic review of ADR-080 + the renumber sweep)
 **Task:** `t_49fe6a7e` (design card; filed by scribe from the RLT spike verdict `t_47925aa7`)
 **Sibling card:** `t_7101e614` (RLT defer-watch registration) — a watchlist, independent of this record
 **Renumbered from:** ADR-079 — the original number was taken by `ADR-079-aware-disclosure-record-generator.md` (Forge, coder, 2026-11-11). Number never reused; the record keeps its content and gains the next free number.
@@ -40,9 +40,9 @@ The 09:11 comment predicted a **bimodal** population (0 for coordinator-sourced 
 
 ## 3. Why the population is empty — three deployment facts, each measured
 
-**3.1 The only chained producers are deployed on a read-only audit mount.**
+**3.1 The chained producers are deployed on a read-only audit mount — and the one producer-capable site inside the coordinator is unreachable.**
 
-The non-null-parent producers are the four compliance mappers (`atlas-mapper.js:728`, `ast10-mapper.js:651`, `llm09-mapper.js:130/163/266/326/379`, `mcp-top10-classifier.js:558`). The compliance modules exist only in the **gateway** image (`aware-2-gateway`), which mounts the audit volume **`rw=false`**:
+The sites that set a non-null `parentDecisionId` are the four compliance mappers (`atlas-mapper.js:728`, `ast10-mapper.js:651`, `llm09-mapper.js:130/163/266/326/379`, `mcp-top10-classifier.js:558`) plus one site in the coordinator itself (`src/coordinator/adapters/mcp.js:410`, see below). The compliance modules exist only in the **gateway** image (`aware-2-gateway`), which mounts the audit volume **`rw=false`**:
 
 ```
 aware-2-gateway     -> aware-2-audit-data -> /data/audit rw=false
@@ -50,6 +50,13 @@ aware-2-coordinator -> aware-2-audit-data -> /data/audit rw=true
 ```
 
 The **coordinator** — the only service with a writable audit mount, and the writer of all 321,587 records — has **no compliance or monitoring modules at all**: `/app/src` contains `audit, budget, config, coordinator, db, policies, trainer`. So the service that *can* write the chain cannot produce a chained record, and the service that *can* produce a chained record cannot write the chain. The read-only gateway mount is a deliberate containment control (`docker-compose.coordinator.yml:156-160`: *"a compromised gateway can't tamper with the chain"*), not an oversight.
+
+**The one exception, and why it does not chain.** `src/coordinator/adapters/mcp.js:410` sets `parentDecisionId: this.parentDecisionId` and its record is written by the coordinator itself (the adapter resolves `../../audit/decision-logger` at `mcp.js:303`), so this site is inside the writable image. It produces no chained record for two independent reasons, both verified on `origin/main` @ `a78bd3d8`:
+
+1. **No parent is ever supplied.** The adapter's constructor defaults the field to `null` (`mcp.js:285`, `opts.parentDecisionId || null`). The only construction site in `src/` is `src/coordinator/index.js:372`, `new mod.MCPAdapter()`, which passes no options; `getMCPAdapter()` (`index.js:390`) returns the **class**, not an instance, so it cannot carry a parent either.
+2. **The emit path has no production caller.** `emitMessage` is reached only through `observeMcpMessage` (`index.js:369`), which is defined and exported but has **no caller in `src/`** — only `test/unit/coordinator/adapters/mcp.test.js` calls it.
+
+So the MCP adapter is a producer-capable site that never produces a chained record. It is recorded here rather than in §9 because it is the counterexample to the "only the gateway can chain" shape above, and because it changes the cost model in §5: a coordinator-native chain for MCP traffic needs **no image change and no mount change** — it needs a parent id at the call site.
 
 **3.2 The annotation path is gated off and un-instantiated.**
 
@@ -105,14 +112,15 @@ The metric's value is bounded by the population, and the population is empty bec
 |---|---|---|---|
 | (a) Make the gateway's audit mount `rw=true` | one compose line | trivial | **Rejected** — deletes a deliberate containment control (a compromised gateway could rewrite the audit trail). Violates the ADR-047/ADR-050 threat model. |
 | (b) Move the compliance mappers into the coordinator image | coordinator image gains `compliance/` | build + image change | Viable; keeps a single writer, but the coordinator then gains a large surface it currently does not carry. |
-| (c) Route annotation writes to the coordinator's existing audit-log endpoint over HTTP | mappers POST instead of writing the file | mapper-level change + auth on the internal path | **Preferred** — the coordinator is already the chain's sole writer; `POST /api/audit/log` already exists (`src/api/routes/audit.js:21`, `src/coordinator/http-server.js:694` `handleAuditLog`). The gateway keeps its read-only mount; the annotation becomes an authenticated write request to the writer. |
+| (c) Route annotation writes to the coordinator's existing audit-log endpoint over HTTP | mappers POST instead of writing the file | mapper-level change + auth on the internal path | **Preferred** for the full annotation population — the coordinator is already the chain's sole writer; `POST /api/audit/log` already exists (`src/api/routes/audit.js:21`, `src/coordinator/http-server.js:694` `handleAuditLog`). The gateway keeps its read-only mount; the annotation becomes an authenticated write request to the writer. |
+| (d) Chain MCP traffic natively in the coordinator | supply a parent id where the adapter is constructed | one call-site change, **no** mount change, **no** image change | **Cheapest first step** — per §3.1 the adapter already sits inside the writable coordinator image and already writes through the coordinator's own decision-logger; it needs a parent id and a production caller for `observeMcpMessage`. Narrower than (c) (it does not populate the ATLAS/AST10 annotation arm), but it is the only option that needs **no** change to the audit write boundary, so it needs no security review of that boundary. |
 
-The metric cannot be specified into existence; it must be *populated* first. That is why D1–D4 are a read-time metric and not a producer.
+The metric cannot be specified into existence; it must be *populated* first. That is why D1–D4 are a read-time metric and not a producer. If the population must be non-empty, **(d) then (c)** is the recommended order: (d) is one call site and touches no control; (c) is the durable fix for the annotation arm but changes the audit write boundary and therefore carries the security review.
 
 ## 6. Failure modes
 
 1. **Chain growth.** 184 MB / 321,587 records today; `AWARE_AUDIT_RETENTION_DAYS=2555` (≈7 years). A full-file census is O(n) per run. At the current size that is seconds; at retention scale it is multi-GB per run. Mitigation: the census persists `id → depth` so subsequent runs are incremental, or it runs over a bounded trailing window. *Detection:* census wall-clock and records-read counters reported in the JSON output.
-2. **Torn writes.** The gateway's decision-logger reports `skipped 5 malformed line(s)` on **57 of 104 log lines in 24 h** (measured on `aware-2-gateway`, 2026-11-12). A census that silently skips unparseable lines **under-reports the population** and therefore under-reports the chained share. Mitigation: the census counts and reports `malformedLines` explicitly; skipping is never silent. *Detection:* `malformedLines` in the report; a non-zero value is expected and must be published, not swallowed.
+2. **Torn writes.** The chain file contains **5 malformed lines** (`malformedLines: 5` in the census, stable across repeated runs). The gateway's decision-logger reports `skipped 5 malformed line(s)` **once per read** of the file — measured on `aware-2-gateway`: **31 warning events over the container's 43.3 h lifetime** (2026-11-10T18:25Z → 2026-11-12T13:42Z), of which **26 fall in the trailing 24 h window**; every warning carries the same count of 5, because it is the same 5 torn lines being re-read. *A ratio of warning events to log lines is not a damage measure* — it moves with log verbosity, not with corruption; an earlier draft of this record carried such a ratio ("57 of 104 log lines in 24 h") and it is withdrawn. The durable facts are the **5 malformed lines** and the fact that the damage does **not** grow: the count has been 5 since the container started, so no new torn writes occurred in 43.3 h. A census that silently skips unparseable lines **under-reports the population** and therefore under-reports the chained share. Mitigation: the census counts and reports `malformedLines` explicitly; skipping is never silent. *Detection:* `malformedLines` in the report; a non-zero value is expected and must be published, not swallowed. A **rising** `malformedLines` is the signal — a flat 5 with a growing `records` is benign.
 3. **Dangling parents.** Retention pruning, gaps, or a torn write can orphan children. A dangling child counted as a root turns a chain gap into a depth of 0. Mitigation: D2's `undefined` + `danglingCount`. *Detection:* `danglingCount > 0` is a chain-health signal in its own right and is reported separately from depth statistics.
 4. **The census mutates its own inputs.** A census that writes into the audit volume (or into the metrics store it is measuring) is a probe that changes what it observes. Mitigation: read-only opens; the report is written to stdout only. *Detection:* the census asserts it never opens the chain file for writing.
 
@@ -124,12 +132,14 @@ Delete `scripts/chain-depth-census.js` and remove its one `COPY` line from `Dock
 
 1. Land `scripts/chain-depth-census.js` (coder) — emits the §4 D3 report; publishes `records`, `chainedShare`, `depthP95`, `depthMax`, `danglingCount`, `malformedLines`.
 2. Run it against the live volume; publish today's numbers as the population baseline: `chainedShare = 0.0` over 321,587 records, `danglingCount = 0`, `malformedLines = 5`.
-3. Decide and implement the writer-side enabling — option (c), §5 — as separate work, with the security review it deserves (it changes the audit write boundary).
+3. Decide and implement the writer-side enabling — option (d) first, then option (c) — as separate work. Option (c) carries the security review it deserves, because it changes the audit write boundary; option (d) does not.
 4. Re-run the census after the first chained records exist; the share moves off 0.00 % only then.
+
+The census's own numbers are **a population baseline, not a proof of emptiness**. `chainedShare = 0.0` over 321,587 records says the *arm does not exist yet*; it is the expected reading of a system where §3.1's conditions hold, and it is falsified the moment the first chained record lands. A later cycle that reads `chainedShare = 0.0` must re-check §3.1 before concluding the metric is broken — the more likely explanation is that the enabling work has not landed yet.
 
 ## 9. Open items / not verified here
 
 - **Not verified:** that the gateway can reach the coordinator's `POST /api/audit/log` in the deployed compose network, and what auth that internal path carries. Option (c)'s cost in §5 assumes a reachable, authenticated path; that must be checked before (c) is committed to.
 - **Not verified:** that the `ATLAS`/`AST10` catalogues would produce annotations on the live traffic mix. Enabling the path may still yield a very small chained population, and the census will say so — that is a finding, not a defect of the metric.
-- **Not verified:** that the MCP adapter ever chains. `src/coordinator/adapters/mcp.js:410` sets `parentDecisionId: this.parentDecisionId`, but the only construction site (`src/coordinator/index.js:372`, `new mod.MCPAdapter()`) passes no options, so the field is always `null`. It is listed in §3.1 as a *capable* producer, not an active one.
+- **Not verified:** that the MCP adapter's *emit path* has a production caller. `src/coordinator/adapters/mcp.js:410` sets `parentDecisionId: this.parentDecisionId`, but no parent is ever supplied (`mcp.js:285` defaults it to `null`; the only `src/` construction site `src/coordinator/index.js:372` passes no options) and `observeMcpMessage` (`index.js:369`) has no caller outside `test/`. The full reasoning is in §3.1. This is the cheapest known route to a non-empty population — it needs a parent id at the call site, not a mount or image change.
 - **Out of scope here:** the RLT framing this metric was derived from. This record deliberately carries no RLT claim.

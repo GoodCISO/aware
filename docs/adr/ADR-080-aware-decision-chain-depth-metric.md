@@ -8,7 +8,7 @@
 **Renumbered from:** ADR-079 — the original number was taken by `ADR-079-aware-disclosure-record-generator.md` (Forge, coder, 2026-11-11), which exists only on the **local `main` lineage** (introduced in `a85b0c0b`); `origin/main` carries no ADR-079 at all. Number never reused; the record keeps its content and gains the next free number. On `origin/main` the number 079 was in fact free, so the gate's filename-uniqueness rule would not itself have refused the original filename there — the collision exists on the local-main lineage, and reconciling the two lineages brings it into existence.
 **Related:** `src/audit/decision-logger.js` (chain reader/writer) · `src/monitoring/metrics-collector.js` (metric-type enum) · `src/monitoring/baseline-service.js` (baseline gate) · `src/monitoring/anomaly-detector.js` (consumer) · `src/compliance/atlas-mapper.js`, `src/compliance/ast10-mapper.js`, `src/compliance/llm09-mapper.js`, `src/compliance/mcp-top10-classifier.js` (the four compliance mappers — the only non-null-parent producers that are *instantiated* in a deployed image) plus `src/coordinator/adapters/mcp.js:410` (producer-capable, not instantiated — see §3.1) · `src/policies/tool-observation-proxy.js` (the annotation gate)
 **Predecessor:** none — this is the first decision on audit-chain depth as an analytics quantity
-**Verified against:** AWARE `origin/main` @ `a78bd3d8`; re-verified on the reconciled lineage (local `main` 10-commit merge) — see §9.1
+**Verified against:** AWARE `origin/main` @ `a78bd3d8` (measurement base). Re-verified on the reconciled lineage — see §9.1.
 
 ---
 
@@ -148,3 +148,24 @@ The census's own numbers are **a population baseline, not a proof of emptiness**
 - **Not verified:** that the `ATLAS`/`AST10` catalogues would produce annotations on the live traffic mix. Enabling the path may still yield a very small chained population, and the census will say so — that is a finding, not a defect of the metric.
 - **Not verified:** that the MCP adapter's *emit path* has a production caller. `src/coordinator/adapters/mcp.js:410` sets `parentDecisionId: this.parentDecisionId`, but no parent is ever supplied (`mcp.js:285` defaults it to `null`; the only `src/` construction site `src/coordinator/index.js:372` passes no options) and `observeMcpMessage` (`index.js:369`) has no caller outside `test/`. The full reasoning is in §3.1. This is the cheapest known route to a non-empty population — it needs two changes (a production caller for `observeMcpMessage`, and a parent id supplied to the adapter it constructs), not a mount or image change.
 - **Out of scope here:** the RLT framing this metric was derived from. This record deliberately carries no RLT claim.
+
+## 9.1 Re-verification on the reconciled lineage
+
+**Measured 2026-11-12.** The local `main` lineage and `origin/main` were reconciled (the local `main` 10-commit merge). This section records what the reconciliation changed in this record and what it did not.
+
+**The citation audit.** This record cites 23 source locations. The reconciliation shifts 2 of them, because the local `main` lineage adds 20 lines to `src/coordinator/http-server.js`:
+
+| Citation | Before | After | Cited content |
+|---|---|---|---|
+| `src/coordinator/http-server.js:694` | `:694` | `:714` | `async function handleAuditLog(req, res, requestId) {` |
+| `src/coordinator/http-server.js:925` | `:925` | `:945` | `parentDecisionId: null,  // root of a chain per request; ...` |
+
+The other 21 citations resolve to identical content after the reconciliation. Each cited line was compared by content, not by line number, and the 2 shifted citations were re-pointed to the lines that now hold the cited content.
+
+**§3.1 still holds.** The reconciliation adds `src/disclosure` to the repository, and it adds `src/config/rlm.cjs`. The coordinator image copies `src/coordinator`, `src/config`, `src/db`, `src/budget`, `src/trainer`, `src/audit` and `src/policies` only. The coordinator image therefore still carries no `compliance` module and no `monitoring` module, and the directory set that §3.1 names is unchanged.
+
+**The measurement is unchanged.** The census reads the volume path `/data/audit/decision-chain.jsonl`, not repository-relative source. The reconciliation changes no file that the census reads, so the §2 measurement stands.
+
+**The ADR number pair is legal on the reconciled lineage.** The reconciliation brings `ADR-079-aware-disclosure-record-generator.md` (the disclosure record generator) and this record (`ADR-080`) onto the same branch. The two numbers are distinct. The `scripts/pre-commit-check.sh` filename-uniqueness rule requires each `ADR-NNN` prefix to be unique; `079` and `080` are each unique. The gate exits 0 on the reconciled tree, and it still fails when a second file claims `079`, so the pass is a live pass and not a disabled check.
+
+**What the reconciliation does change.** The reconciled `Dockerfile.coordinator` copies `config/rlm.yaml`, `config/rlm.schema.json` and `src/config/rlm.cjs` into the coordinator image. The running coordinator image does not carry these files today. A rebuild is therefore required for the reconciled lineage, and the rebuild must happen before the RLM configuration takes effect.

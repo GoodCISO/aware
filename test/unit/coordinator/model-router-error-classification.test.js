@@ -172,9 +172,12 @@ function findRlPipelineEntry() {
   const here = dirname(fileURLToPath(import.meta.url));
   const candidates = [
     process.env.AWARE_RL_PIPELINE_PATH,
+    // Sibling checkout of rl-pipeline, one level above the AWARE repo root.
     resolve(here, '..', '..', '..', '..', 'rl-pipeline', 'src', 'index.js'),
-    resolve(here, '..', '..', '..', '..', '..', 'rl-pipeline', 'src', 'index.js'),
-    resolve(here, '..', '..', '..', '..', 'backend', 'heavy-think', 'src', 'index.js'),
+    // The vendored copy inside this repo (repo root is three levels up from
+    // test/unit/coordinator). This is the fallback that makes the full-path
+    // test runnable on a host with no sibling rl-pipeline checkout.
+    resolve(here, '..', '..', '..', 'backend', 'heavy-think', 'src', 'index.js'),
   ].filter(Boolean);
   return candidates.find(p => existsSync(p)) || null;
 }

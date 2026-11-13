@@ -139,7 +139,18 @@ export function makeModelRouter({ clients, mode = 'hybrid', model = null, health
         }
         return { ...result, _routed_via: client.name };
       } catch (err) {
-        errors.push({ client: client.name, error: err.message || String(err) });
+        errors.push({
+          client: client.name,
+          error: err.message || String(err),
+          // Preserve the structured identity of the backend failure (e.g.
+          // code 'upstream_rate_limited' / statusCode 429 on a provider 429).
+          // The aggregate error below re-uses these, so a downstream
+          // classifier can tell a rate limit apart from an upstream outage.
+          // `undefined` fields are dropped by JSON.stringify, so the
+          // aggregate's message is unchanged for clients that set no code.
+          code: err && err.code,
+          statusCode: err && err.statusCode,
+        });
         // Mark unhealthy in cache so we don't immediately retry it
         healthCache.set(client.name, { ok: false, at: Date.now() });
         // Continue to next client
@@ -152,6 +163,23 @@ export function makeModelRouter({ clients, mode = 'hybrid', model = null, health
       `Errors: ${JSON.stringify(errors)}`
     );
     err.routerErrors = errors;
+    // Carry the structured error identity of the failed backend(s) onto the
+    // aggregate. Before this, the aggregate carried neither `code` nor
+    // `statusCode`, so `classifyError()` (rl-pipeline-bridge-integration.js)
+    // fell through to its message regex and every provider 429 was recorded
+    // as 'upstream_error' — the 'upstream_rate_limited' branch was
+    // unreachable in production.
+    //
+    // A rate-limited backend wins over other failures: if ANY backend
+    // reported a rate limit, the aggregate is a rate limit.
+    const rateLimited = errors.find(
+      e => e.code === 'upstream_rate_limited' || e.statusCode === 429
+    );
+    const firstWithIdentity = rateLimited || errors.find(e => e.code || e.statusCode);
+    if (firstWithIdentity) {
+      if (firstWithIdentity.code) err.code = firstWithIdentity.code;
+      if (firstWithIdentity.statusCode) err.statusCode = firstWithIdentity.statusCode;
+    }
     throw err;
   }
 

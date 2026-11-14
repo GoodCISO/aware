@@ -8,6 +8,7 @@ import KillSwitchContainer from './containers/KillSwitchContainer';
 import AnomalyDetectionContainer from './containers/AnomalyDetectionContainer';
 import ComplianceContainer from './containers/ComplianceContainer';
 import AuditTrailContainer from './containers/AuditTrailContainer';
+import Operators from './containers/Operators';
 import { connectWebSocket } from './services/websocket';
 
 function App() {
@@ -26,6 +27,7 @@ function App() {
         <Route path="anomalies" element={<AnomalyDetectionContainer />} />
         <Route path="compliance" element={<ComplianceContainer />} />
         <Route path="audit" element={<AuditTrailContainer />} />
+        <Route path="operators" element={<Operators />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>
     </Routes>

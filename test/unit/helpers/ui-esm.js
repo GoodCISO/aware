@@ -19,4 +19,5 @@ module.exports = {
   severity: () => import('../../../src/ui/src/constants/severity.js'),
   severityRamp: () => import('../../../src/ui/src/styles/severityRamp.js'),
   domainAliases: () => import('../../../src/ui/src/styles/domainAliases.js'),
+  operators: () => import('../../../src/ui/src/constants/operators.js'),
 };

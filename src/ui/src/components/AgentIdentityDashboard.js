@@ -1,8 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { Box, Typography, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Paper, Chip, LinearProgress, Tooltip, IconButton } from '@mui/material';
+import { Box, Typography, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Paper, Chip, Tooltip, IconButton } from '@mui/material';
 import KeyIcon from '@mui/icons-material/VpnKey';
 import FingerprintIcon from '@mui/icons-material/Fingerprint';
 import StatusIndicator from './StatusIndicator';
+import TrustGauge from './TrustGauge';
+import { trustBandForTrustScore } from '../constants/operators';
 
 const AgentIdentityDashboard = ({ agents = [] }) => {
   const [sortField, setSortField] = useState('trustScore');
@@ -52,16 +54,17 @@ const AgentIdentityDashboard = ({ agents = [] }) => {
                   <StatusIndicator status={agent.status} />
                 </TableCell>
                 <TableCell>
-                  <Tooltip title={`Trust Score: ${agent.trustScore}/100`}>
-                    <Box width={120}>
-                      <LinearProgress
-                        variant="determinate"
-                        value={agent.trustScore}
-                        color={agent.trustScore > 80 ? 'success' : agent.trustScore > 50 ? 'warning' : 'error'}
-                        sx={{ height: 8, borderRadius: 4 }}
-                      />
-                    </Box>
-                  </Tooltip>
+                  {/* The gauge now lives in TrustGauge so the agent screen
+                      and the Operators screen cannot drift apart. The
+                      cut points (>80 high, >50 medium) and the colours
+                      (success / warning / error) are unchanged, so this is
+                      a ZERO-VISUAL-CHANGE for the agent screen. */}
+                  <TrustGauge
+                    value={agent.trustScore}
+                    band={trustBandForTrustScore(agent.trustScore)}
+                    entityKind="agent"
+                    label={`Trust Score: ${agent.trustScore}/100`}
+                  />
                 </TableCell>
                 <TableCell>
                   <Box display="flex" gap={0.5} flexWrap="wrap">

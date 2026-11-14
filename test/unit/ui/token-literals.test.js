@@ -34,10 +34,26 @@ const path = require('node:path');
 const UI_SRC = path.resolve(__dirname, '../../../src/ui/src');
 const { realTheme } = require('../helpers/ui-real-theme');
 
-const componentFiles = (dir) =>
-  fs.readdirSync(dir, { withFileTypes: true })
-    .filter((e) => e.isFile() && e.name.endsWith('.js'))
-    .map((e) => path.join(dir, e.name));
+// RECURSION (t_1980c9b1): this walked only the TOP level of each directory,
+// so a screen in a SUBDIRECTORY -- src/ui/src/containers/Operators/ -- was
+// invisible to every scan below. A scan that cannot see the file reads as
+// clean while the file is untouched: the same lesson as the F3 header
+// (a #hex scan cannot see rgba()). This now walks nested directories.
+//
+// The recursion is bounded to .js files under the three scanned roots, so
+// it cannot walk node_modules or any other heavy tree.
+const componentFiles = (dir) => {
+  const out = [];
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      out.push(...componentFiles(full));
+    } else if (entry.isFile() && entry.name.endsWith('.js')) {
+      out.push(full);
+    }
+  }
+  return out;
+};
 
 const TREE = ['components', 'containers', 'constants']
   .map((d) => path.join(UI_SRC, d))

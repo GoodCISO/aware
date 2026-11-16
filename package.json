@@ -24,6 +24,7 @@
     "src/disclosure/",
     "src/election/",
     "src/emergency/",
+    "src/extension/",
     "src/engine-secret.js",
     "src/gateway/",
     "src/index.js",

@@ -35,6 +35,46 @@ class PolicyEngine {
     this.policyStore = getPolicyStore(config.policyStore);
     this.defaultDecision = config.defaultDecision || DEFAULT_DECISION;
     this.frequencyWindows = new Map(); // Track frequency windows
+
+    // ── Extension point ──
+    // The registry is optional. With none registered, evaluate() is the
+    // untouched prototype method and this is a pure pass-through.
+    //
+    // The wrapper is installed here rather than at each `return` site inside
+    // evaluate() because evaluate() has many internal return points, and a
+    // per-return hook would silently miss any return added later.
+    this.extensions = config.extensions || null;
+    if (this.extensions) {
+      const rawEvaluate = this.evaluate.bind(this);
+      this.evaluate = (request) => {
+        const result = rawEvaluate(request);
+        // Fire and forget: an extension must never delay or alter a policy
+        // decision. The registry contains failures, so a throwing extension
+        // is recorded rather than propagated.
+        // The extension receives a DEEP COPY. It is an observer, not a
+        // participant: handing it the live object would let it rewrite the
+        // verdict in place, which would be a policy bypass. (Found by the
+        // contract test in test/unit/extension/extension-contract.test.js,
+        // which asserts the extension CANNOT change the decision.)
+        let snapshot;
+        try {
+          snapshot = {
+            request: structuredClone(request),
+            decision: structuredClone(result),
+          };
+        } catch (_e) {
+          // If the decision carries something structuredClone cannot handle,
+          // skip the notification rather than risk handing over a live
+          // reference. An extension that misses one event is better than an
+          // extension that can flip a verdict.
+          return result;
+        }
+        Promise.resolve(
+          this.extensions.dispatch('onDecision', snapshot)
+        ).catch(() => {});
+        return result;
+      };
+    }
   }
 
   /**

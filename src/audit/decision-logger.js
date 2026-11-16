@@ -427,7 +427,28 @@ async function logDecision(decision) {
   await updateIndex(decision.decisionId, computedHash);
   
   console.log(`[decision-logger] Logged decision: ${decision.decisionId}`);
-  
+
+  // ── Extension point ──
+  // Registered extensions are notified that a record was appended to the
+  // chain. This is how an implementation anchors its own artefact (for
+  // example a signed receipt) in the tamper-evident log.
+  //
+  // The notification happens AFTER the append and the index update, so an
+  // extension observes a committed record. The chain head is passed so the
+  // extension can reference it. Failure is contained by the registry.
+  if (global.__AWARE_EXTENSION_REGISTRY__) {
+    try {
+      Promise.resolve(
+        global.__AWARE_EXTENSION_REGISTRY__.dispatch('onAuditAppend', {
+          event: recordWithHash,
+          chainHead: computedHash,
+        })
+      ).catch(() => {});
+    } catch (_e) {
+      // Never let an extension break the audit path.
+    }
+  }
+
   return computedHash;
 }
 

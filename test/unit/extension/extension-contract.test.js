@@ -26,6 +26,23 @@ const {
 } = require('../../../src/extension');
 
 const { PolicyEngine } = require('../../../src/policies/engine');
+const { getPolicyStore } = require('../../../src/policies/store');
+
+// The policy store is a SINGLETON (src/policies/store.js:408) whose auto-
+// backup interval is started when it is first constructed. Constructing a
+// PolicyEngine constructs it. The store exposes stop() (store.js:166) for
+// exactly this purpose, and the repo's existing tests use the same pattern
+// for their timers (test/unit/coordinator/lora-reloader.test.js).
+//
+// The interval is also unref'd at the source, so this cleanup is belt and
+// braces rather than the only defence.
+test.after(() => {
+  try {
+    getPolicyStore().stop();
+  } catch (_e) {
+    // The store may never have been constructed. Nothing to clean up.
+  }
+});
 
 // ── contract version ───────────────────────────────────────────────────────
 

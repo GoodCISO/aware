@@ -22,6 +22,7 @@ import { randomUUID, timingSafeEqual, createHash } from 'node:crypto';
 import { coordinate, buildDefaultRouter, buildDefaultJudgeClient, COORDINATOR_VERSION, COORDINATOR_BUILD_PHASE } from './index.js';
 import config from '../config/index.cjs';
 import rlmConfig from '../config/rlm.cjs';
+import { verifyDeployedJudgePath } from '../config/rl-pipeline-build.cjs';
 import { logConversationFireAndCodert } from '../db/logger.js';
 import { runMigrations } from '../db/index.js';
 import { checkBudget, getBudgetStatus, isEnabled as isBudgetEnabled } from '../budget/watchdog.js';
@@ -138,6 +139,35 @@ if (rlmConfig.validate() !== false) {
     // eslint-disable-next-line no-console
     console.warn(`[aware-coordinator] rlm config: ${warning}`);
   }
+}
+
+// ─── deployed judge-path integrity (AWARE card t_091892e3) ───────────────
+// The coordinator's rl-pipeline used to be cloned from an external git
+// server at a pinned tag, while the repo carried its own vendored copy.
+// Nothing compared the two, so the deployed image could run a verify.js
+// with no `llm-judge` while config/rlm.yaml named `llm-judge` as the
+// default verification method — the declared default was inert for the
+// entire life of the corpus (329,627 of 329,639 live pairs carry
+// verification.method == 'none').
+//
+// The image now ships the reviewed tree, and this check proves at BOOT
+// that the tree the coordinator is about to execute is byte-for-byte the
+// tree that was reviewed. A mismatch FAILS THE BOOT: a drifted judge path
+// must not run, because every preference pair it writes is training data.
+const judgePathCheck = verifyDeployedJudgePath();
+if (!judgePathCheck.ok) {
+  throw new Error(
+    `[aware-coordinator] the deployed rl-pipeline tree does not match the shipped manifest — ` +
+    `${judgePathCheck.problems.join('; ')}. ` +
+    `Tree: ${judgePathCheck.srcDir}. Manifest: ${judgePathCheck.manifestPath}. ` +
+    'Refusing to boot with a judge path that differs from the reviewed tree.'
+  );
+}
+if (judgePathCheck.source === 'manifest') {
+  // eslint-disable-next-line no-console
+  console.log(
+    `[aware-coordinator] judge-path integrity: ${judgePathCheck.checked} source file(s) verified against ${judgePathCheck.manifestPath}`
+  );
 }
 
 // Phase 2.1: run Postgres migrations on boot. Best-effort — if the DB is

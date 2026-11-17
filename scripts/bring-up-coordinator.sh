@@ -89,10 +89,10 @@ log "validating $COMPOSE_FILE"
 docker compose -f "$COMPOSE_FILE" -p "$PROJECT" config >/dev/null \
   || fail "compose file failed validation"
 
-# 3. Build the coordinator + gateway images. The Dockerfile's Stage 0
-#   clones rl-pipeline from the local Gitea at AWARE_RL_PIPELINE_TAG (see
-#   ADR (internal)), so the host's redacted-external-repo/ working copy is NOT the
-#   source of truth. No drift check needed here.
+# 3. Build the coordinator + gateway images. The coordinator image ships
+#   the repo's OWN vendored rl-pipeline copy (backend/heavy-think/src),
+#   so the working copy IS the source of truth and there is no external
+#   git remote to drift from. See AWARE card t_091892e3.
 log "building coordinator + gateway images (this may take a few minutes on first run)"
 DOCKER_BUILDKIT=1 docker compose \
   -f "$COMPOSE_FILE" -p "$PROJECT" \

@@ -78,6 +78,10 @@ COPY src/coordinator ./src/coordinator
 # ERR_MODULE_NOT_FOUND. test/unit/config/rl-pipeline-build.test.js asserts
 # that every src/config module the coordinator imports is shipped here.
 COPY src/config/index.cjs ./src/config/index.cjs
+# src/config/index.cjs requires ./judge-family.cjs (the model-family map behind
+# the judge independence guard, kanban t_2a91cc4b). A COPY that omits it
+# makes the coordinator fail to START with ERR_MODULE_NOT_FOUND.
+COPY src/config/judge-family.cjs ./src/config/judge-family.cjs
 COPY src/config/rlm.cjs ./src/config/rlm.cjs
 COPY src/config/rl-pipeline-build.cjs ./src/config/rl-pipeline-build.cjs
 COPY src/db ./src/db

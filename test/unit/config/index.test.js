@@ -236,6 +236,13 @@ test('config: snapshot() shape is stable', (t) => {
     // was previously hard-coded inside the pinned rl-pipeline dependency,
     // so it could not be changed without republishing that library.
     // AWARE_PROVIDER_MODEL makes it an operator setting.
+    // judge* added 2026-11-16 (t_89720a07): the independent judge's
+    // identity and credentials are operator settings. The snapshot
+    // REDACTS the key — it reports only whether one is set and its
+    // length — so the key itself never appears here.
+    // (sorted: judge* precedes mode)
+    'judgeApiHost', 'judgeApiKeyLength', 'judgeApiKeySet', 'judgeModel',
+    'judgeOllamaModel',
     'mode', 'ollamaTimeoutMs', 'ollamaUrl', 'providerApiKey', 'providerHost',
     'providerModel',
   ]);

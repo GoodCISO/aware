@@ -293,3 +293,69 @@ test('the coordinator Dockerfile ships EVERY src/config module the coordinator i
     );
   }
 });
+
+test('the coordinator Dockerfile ships EVERY src/config module reachable from the coordinator', () => {
+  // The scan above only covers DIRECT `../config/<name>` imports. A config
+  // module that requires a SIBLING config module creates a TRANSITIVE
+  // dependency: src/config/index.cjs requires ./judge-family.cjs (the
+  // model-family map behind the judge independence guard, kanban t_2a91cc4b),
+  // and a Dockerfile that COPYs only the modules the coordinator names
+  // directly omits it — the coordinator then fails to START with
+  // ERR_MODULE_NOT_FOUND, because the require is at module load time.
+  //
+  // This test walks the require graph from the coordinator's direct imports
+  // and asserts every reachable config module is shipped.
+  const dockerfile = fs.readFileSync(
+    path.join(REPO_ROOT, 'Dockerfile.coordinator'),
+    'utf8'
+  );
+  const configDir = path.join(REPO_ROOT, 'src', 'config');
+
+  const coordinatorDir = path.join(REPO_ROOT, 'src', 'coordinator');
+  const direct = new Set();
+  for (const file of fs
+    .readdirSync(coordinatorDir, { withFileTypes: true })
+    .filter((e) => e.isFile() && e.name.endsWith('.js'))
+    .map((e) => path.join(coordinatorDir, e.name))) {
+    const body = fs.readFileSync(file, 'utf8');
+    const re = /from\s+['"]\.\.\/config\/([^'"]+)['"]/g;
+    let m;
+    while ((m = re.exec(body)) !== null) direct.add(m[1]);
+  }
+
+  // Walk the require graph: a config module may require a sibling with
+  // `require('./<name>')`.
+  const reachable = new Set();
+  const queue = [...direct];
+  while (queue.length > 0) {
+    const mod = queue.pop();
+    if (reachable.has(mod)) continue;
+    reachable.add(mod);
+    const file = path.join(configDir, mod);
+    if (!fs.existsSync(file)) continue;
+    const body = fs.readFileSync(file, 'utf8');
+    const re = /require\(\s*['"]\.\/([^'"]+)['"]\s*\)/g;
+    let m;
+    while ((m = re.exec(body)) !== null) {
+      const dep = m[1];
+      if (fs.existsSync(path.join(configDir, dep))) queue.push(dep);
+    }
+  }
+
+  assert.ok(
+    reachable.size > direct.size,
+    'the transitive scan found nothing beyond the direct imports — the scan is broken, so this test proves nothing'
+  );
+
+  for (const mod of reachable) {
+    assert.ok(
+      fs.existsSync(path.join(configDir, mod)),
+      `src/config/${mod} is reachable from the coordinator but does not exist in the repo`
+    );
+    assert.match(
+      dockerfile,
+      new RegExp(`COPY src/config/${mod.replace(/\./g, '\\.')} `),
+      `the Dockerfile does not ship src/config/${mod} — the coordinator would fail to start with ERR_MODULE_NOT_FOUND`
+    );
+  }
+});

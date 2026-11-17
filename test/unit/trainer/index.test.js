@@ -627,11 +627,23 @@ test('trainer: Phase 4 — outcome filter drops all pairs → run cancelled, no 
   // Three records, all with tight score gaps (0.04 < 0.5 threshold)
   const lines = [];
   for (let i = 0; i < 3; i++) {
+    // Judge declaration (kanban t_155a95a1): the gap may only gate for an
+    // INDEPENDENT judge declared with a gating role, so this fixture
+    // declares one. The pairs below are dropped for the reason this test
+    // is about -- a gap below the threshold -- not for lack of a judge.
+    const judge = {
+      prm_score_role: 'launch_gate',
+      prm_score_independent: true,
+      prm_score_judge_model: 'judge-model-x',
+    };
     lines.push(JSON.stringify({
       problem: `problem ${i}`,
       task_type: 'arithmetic',
-      chosen: { reasoning: 'A', prm_score: 0.52 },
-      rejected: { reasoning: 'B', prm_score: 0.48 },
+      chosen: { reasoning: 'A', prm_score: 0.52, prm_score_source: 'prm_judge', ...judge },
+      rejected: { reasoning: 'B', prm_score: 0.48, prm_score_source: 'prm_judge', ...judge },
+      prm_score_role: judge.prm_score_role,
+      prm_score_independent: judge.prm_score_independent,
+      prm_score_judge_model: judge.prm_score_judge_model,
       _content_hash: `hash0000000000${i}0`.slice(0, 16),
     }));
   }

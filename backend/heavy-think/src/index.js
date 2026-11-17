@@ -8,6 +8,7 @@ import { refine } from './refine.js';
 import { scoreWithPRM } from './prm.js';
 import { verify } from './verify.js';
 import { writePreferencePair, shouldSkipDuplicate } from './preference-pair.js';
+import { describeJudge } from './judge-role.js';
 import { defaultKForTaskType, K_CONFIGS } from './config.js';
 
 /**
@@ -50,6 +51,11 @@ export async function heavy_think(options) {
   const verification = options.verification || null;
   const prmConfig = options.prm || {};
   const client = options.client;  // injected for tests; production: build default minimax client
+  // The client that served the PRM judge. `options.judgeClient` is the
+  // separate judge client (the sibling card t_89720a07); until one is
+  // configured the judge IS the producer's client, which makes the judge
+  // same-family by construction.
+  const judgeClient = options.judgeClient || client;
   const pairPath = options.preferencePairPath || null;
   const cache = options.cache || null;  // Phase 2.2 — optional PRM score cache
   // MR-HIGH-002 fix: forward system_prompt through the heavy_think pipeline
@@ -168,6 +174,17 @@ export async function heavy_think(options) {
   }
 
   // 6. WRITE PREFERENCE PAIR (only if not duplicate)
+  //
+  // Judge identity + role (kanban t_155a95a1). The pair must say WHO judged
+  // it and WHAT ROLE that verdict plays before anything downstream is allowed
+  // to gate on it (04-ai-product-evaluation.md:35-36, :187-190). The role is
+  // 'diagnostic' unless the judge is an independent model family AND the
+  // caller declared a gating role.
+  const judge = describeJudge({
+    candidateModel: client?.model || null,
+    judgeModel: judgeClient?.model || null,
+    role: prmConfig.role || null,
+  });
   let pair_written = false;
   if (pairPath) {
     const contentHash = hashAttempt(problem, bestInitial.reasoning, refinement.refined_trace);
@@ -179,6 +196,12 @@ export async function heavy_think(options) {
           ts: new Date().toISOString(),
           problem,
           task_type,
+          // Judge role + independence (kanban t_155a95a1). The verdict's
+          // ROLE is declared on the record so nothing downstream can gate
+          // on a score whose role was never named. See src/judge-role.js.
+          prm_score_role: judge.prm_score_role,
+          prm_score_independent: judge.prm_score_independent,
+          prm_score_judge_model: judge.prm_score_judge_model,
           chosen: {
             reasoning: refinement.refined_trace,
             // Judge-sourced — the SAME instrument as `rejected.prm_score`.
@@ -188,11 +211,13 @@ export async function heavy_think(options) {
             // legacy length heuristic). NOT a PRM score — never compare it
             // against a judge score.
             refinement_confidence: refinement.refinement_confidence,
+            ...judge,
           },
           rejected: {
             reasoning: bestInitial.reasoning,
             prm_score: bestInitial.prm_score,
             prm_score_source: 'prm_judge',
+            ...judge,
           },
           all_attempts: attemptsWithSelection.map(a => ({
             reasoning: a.reasoning,

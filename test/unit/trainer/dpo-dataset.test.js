@@ -25,6 +25,24 @@ function makeRecord(overrides = {}) {
   };
 }
 
+// Judge declaration (kanban t_155a95a1). The assembler's GAP check is a
+// quality certification, so it may only fire for an INDEPENDENT judge
+// declared with a gating role. The gap-magnitude tests below therefore
+// declare one; the demotion tests do not.
+function declareGateJudge(rec, judgeModel = 'judge-model-x') {
+  const decl = {
+    prm_score_role: 'launch_gate',
+    prm_score_independent: true,
+    prm_score_judge_model: judgeModel,
+  };
+  rec.prm_score_role = decl.prm_score_role;
+  rec.prm_score_independent = decl.prm_score_independent;
+  rec.prm_score_judge_model = decl.prm_score_judge_model;
+  rec.chosen = { ...rec.chosen, ...decl, prm_score_source: rec.chosen?.prm_score_source || 'prm_judge' };
+  rec.rejected = { ...rec.rejected, ...decl, prm_score_source: rec.rejected?.prm_score_source || 'prm_judge' };
+  return rec;
+}
+
 // -- Empty / invalid input ----------------------------------------------
 
 test('dpo-dataset: empty input returns empty rows, zero skipped', () => {
@@ -32,7 +50,9 @@ test('dpo-dataset: empty input returns empty rows, zero skipped', () => {
   assert.deepEqual(result.rows, []);
   // mixedInstrument was added 2026-11-11 (kanban t_99423c45) alongside the
   // score-instrument parity guard.
-  assert.deepEqual(result.skipped, { lowGap: 0, duplicate: 0, invalid: 0, mixedInstrument: 0 });
+  assert.deepEqual(result.skipped, {
+    lowGap: 0, duplicate: 0, invalid: 0, mixedInstrument: 0, nonIndependentJudge: 0,
+  });
 });
 
 test('dpo-dataset: rejects unknown format with clear error', () => {
@@ -116,7 +136,7 @@ test('dpo-dataset: minScoreGap drops records with gap < threshold', () => {
     rejected: { reasoning: '9', prm_score: 0.20 },
     _content_hash: 'h-wide',
   });
-  const result = toDpoDataset([tight, wide], { minScoreGap: 0.1 });
+  const result = toDpoDataset([declareGateJudge(tight), declareGateJudge(wide)], { minScoreGap: 0.1 });
   assert.equal(result.rows.length, 1);
   assert.equal(result.rows[0].prompt[0].content, 'What is 4+4?');
   assert.equal(result.skipped.lowGap, 1);
@@ -128,7 +148,7 @@ test('dpo-dataset: minScoreGap uses default 0.05 when omitted', () => {
     rejected: { reasoning: 'B', prm_score: 0.50 },
     _content_hash: 'h-default-tight',
   });
-  const result = toDpoDataset([tight]);
+  const result = toDpoDataset([declareGateJudge(tight)]);
   // gap = 0.01 < 0.05 → drop
   assert.equal(result.rows.length, 0);
   assert.equal(result.skipped.lowGap, 1);
@@ -159,7 +179,7 @@ test('dpo-dataset: minScoreGap also drops inverted pairs (gap < 0)', () => {
     rejected: { reasoning: 'confident', prm_score: 0.80, prm_score_source: 'prm_judge' },
     _content_hash: 'h-inverted',
   });
-  const result = toDpoDataset([inverted]);
+  const result = toDpoDataset([declareGateJudge(inverted)]);
   // gap = -0.05 < 0.05 → drop
   assert.equal(result.rows.length, 0);
   assert.equal(result.skipped.lowGap, 1);

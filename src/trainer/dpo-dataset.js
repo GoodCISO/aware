@@ -29,11 +29,14 @@
 //   rows: Array<{ prompt, chosen, rejected }> where each is a
 //         [{role: 'user'|'assistant', content: string}] messages array.
 //
-//   skipped: { lowGap, duplicate, invalid } — counts of records dropped
-//            for each reason. Surfaced in trainer's debug log.
+//   skipped: { lowGap, duplicate, invalid, mixedInstrument, nonIndependentJudge }
+//            — counts of records dropped for each reason. Surfaced in
+//            trainer's debug log.
 //
 // The function is pure — no I/O, no clock, no randomness. Safe to call
 // from tests, from the trainer's main loop, or from a one-off CLI script.
+
+import { mayJudgeGate } from './judge-role.js';
 
 const SUPPORTED_FORMATS = new Set(['messages']);
 
@@ -107,6 +110,8 @@ export function sameScoreInstrument(chosen, rejected) {
  * @property {number} invalid
  * @property {number} mixedInstrument — pairs whose two sides carry scores
  *           from different instruments (the gap would be meaningless)
+ * @property {number} nonIndependentJudge — pairs whose judge was not
+ *           independent of the candidate (their verdict may not gate)
  */
 
 /**
@@ -140,7 +145,13 @@ export function toDpoDataset(records, options = {}) {
   const dedupeByHash = options.dedupeByHash !== false; // default true
 
   const rows = [];
-  const skipped = { lowGap: 0, duplicate: 0, invalid: 0, mixedInstrument: 0 };
+  const skipped = {
+    lowGap: 0,
+    duplicate: 0,
+    invalid: 0,
+    mixedInstrument: 0,
+    nonIndependentJudge: 0,
+  };
   const seenHashes = new Set();
 
   for (const rec of records) {
@@ -163,15 +174,36 @@ export function toDpoDataset(records, options = {}) {
     // dropped better-refined pairs as "inverted" (74,840 of 329,558 live
     // pairs). Skip such pairs here too, so the rule holds even when the
     // operator runs the outcome filter with rule='noop'.
+    // JUDGE ROLE (2026-11-17, kanban t_155a95a1).
+    //
+    // The assembler's gap check is a QUALITY certification: "this pair is
+    // good enough to train on". Only a judge that is independent of the
+    // candidate AND declared with a gating role may certify that
+    // (04-ai-product-evaluation.md:27-43, :187-190). For every other judge
+    // the gap is a DIAGNOSTIC: the pair is admitted, the gap is not a reason
+    // to exclude it, and the signal is preserved on the record for the
+    // future independent judge and the human re-read slice.
+    //
+    // This is checked FIRST because it is the coarser question: a pair the
+    // judge may not certify is not excluded on a gap computed by that judge.
+    // The score-instrument PARITY check below is NOT affected -- it is about
+    // the two sides being comparable at all (t_99423c45), not about
+    // certifying quality, and it must keep running.
+    const judgeMayGate = mayJudgeGate(rec);
+    if (!judgeMayGate) {
+      skipped.nonIndependentJudge += 1;
+    }
     if (typeof chosenScore === 'number' && typeof rejectedScore === 'number') {
       if (!sameScoreInstrument(rec.chosen, rec.rejected)) {
         skipped.mixedInstrument += 1;
         continue;
       }
-      const gap = chosenScore - rejectedScore;
-      if (gap + 1e-9 < minScoreGap) {
-        skipped.lowGap += 1;
-        continue;
+      if (judgeMayGate) {
+        const gap = chosenScore - rejectedScore;
+        if (gap + 1e-9 < minScoreGap) {
+          skipped.lowGap += 1;
+          continue;
+        }
       }
     }
     // dedupeByHash filter — first occurrence wins. Honors content

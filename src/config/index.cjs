@@ -271,6 +271,23 @@ const config = {
     // values to keep (comma-separated env var). Empty default =
     // "operator hasn't decided yet" → keep all (see outcome-filter.js).
     get filterAllowedTaskTypes() { return str('AWARE_TRAINER_FILTER_ALLOWED_TASK_TYPES', ''); },
+    // Require an INDEPENDENT judge on every pair the filter admits
+    // (2026-11-17, kanban t_155a95a1).
+    //
+    // The producer writes `prm_score_independent` on every preference pair.
+    // Today the judge IS the producer's client, so every pair is same-family
+    // and therefore NOT independent -- and under
+    // `04-ai-product-evaluation.md:187-190` a same-family verdict is a
+    // DIAGNOSTIC, never a launch gate. Setting this to '1' makes the filter
+    // drop every pair whose judge was not independent.
+    //
+    // It is ORTHOGONAL to `filterRule`: set it alongside
+    // AWARE_TRAINER_FILTER_RULE=min_score_gap to get "independent judge AND
+    // same-instrument AND a wide enough gap", rather than replacing the
+    // parity checks. Default '0' = the operator has not required it.
+    get filterRequireIndependentJudge() {
+      return str('AWARE_TRAINER_FILTER_REQUIRE_INDEPENDENT_JUDGE', '0');
+    },
     // Phase 4 (the AWARE 2.0 Architecture ADR (internal) 618-627) AZR self-play corpus path. When set,
     // the trainer records it on aware_training_runs.azr_corpus_path
     // and ingests per-record results into aware_azr_results at
@@ -437,6 +454,7 @@ config.snapshot = function snapshot() {
       filterRule: c.trainer.filterRule,
       filterMinGap: c.trainer.filterMinGap,
       filterAllowedTaskTypes: c.trainer.filterAllowedTaskTypes,
+      filterRequireIndependentJudge: c.trainer.filterRequireIndependentJudge,
       azrCorpusPath: c.trainer.azrCorpusPath,
       modalTokenId: redact('modalTokenId', c.trainer.modalTokenId),
       modalTokenSecret: redact('modalTokenSecret', c.trainer.modalTokenSecret),

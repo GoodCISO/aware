@@ -13,6 +13,7 @@
 		"./parallel": "./src/parallel.js",
 		"./refine": "./src/refine.js",
 		"./prm": "./src/prm.js",
+		"./judge-role": "./src/judge-role.js",
 		"./verify": "./src/verify.js",
 		"./preference-pair": "./src/preference-pair.js",
 		"./config": "./src/config.js",

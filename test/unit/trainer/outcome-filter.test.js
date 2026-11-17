@@ -25,6 +25,48 @@ function makeRecord(overrides = {}) {
   };
 }
 
+// Judge declaration helpers (kanban t_155a95a1).
+//
+// Every preference pair now carries the ROLE of the judge that scored it,
+// whether that judge is INDEPENDENT of the candidate, and which model
+// served the judge. A record with NO declaration is a diagnostic by default
+// ("If you cannot name which of the three it is, it is a diagnostic" --
+// 04-ai-product-evaluation.md:35-36), so a gap computed by an undeclared or
+// same-family judge is a DIAGNOSTIC and may not gate.
+//
+// The gap-magnitude tests below are about the GAP, so they declare an
+// INDEPENDENT judge with a gating role -- the only case in which the gap
+// may decide membership of the training set.
+function declareGateJudge(rec, judgeModel = 'judge-model-x') {
+  const decl = {
+    prm_score_role: 'launch_gate',
+    prm_score_independent: true,
+    prm_score_judge_model: judgeModel,
+  };
+  rec.prm_score_role = decl.prm_score_role;
+  rec.prm_score_independent = decl.prm_score_independent;
+  rec.prm_score_judge_model = decl.prm_score_judge_model;
+  rec.chosen = { ...rec.chosen, ...decl, prm_score_source: rec.chosen?.prm_score_source || 'prm_judge' };
+  rec.rejected = { ...rec.rejected, ...decl, prm_score_source: rec.rejected?.prm_score_source || 'prm_judge' };
+  return rec;
+}
+
+// A same-family judge: the producer's own client. Its verdict is a
+// diagnostic and may not gate.
+function declareSameFamilyJudge(rec, judgeModel = 'MiniMax-M3.1-Flash') {
+  const decl = {
+    prm_score_role: 'diagnostic',
+    prm_score_independent: false,
+    prm_score_judge_model: judgeModel,
+  };
+  rec.prm_score_role = decl.prm_score_role;
+  rec.prm_score_independent = decl.prm_score_independent;
+  rec.prm_score_judge_model = decl.prm_score_judge_model;
+  rec.chosen = { ...rec.chosen, ...decl, prm_score_source: rec.chosen?.prm_score_source || 'prm_judge' };
+  rec.rejected = { ...rec.rejected, ...decl, prm_score_source: rec.rejected?.prm_score_source || 'prm_judge' };
+  return rec;
+}
+
 // -- noop (explicit opt-in) ----------------------------------------------
 // As of 2026-06-22 (ADR (internal) Repair 1), 'noop' is no longer the
 // default rule. It's still available for explicit opt-in via
@@ -66,7 +108,7 @@ test('outcome-filter: min_score_gap drops records with gap < threshold', () => {
     chosen: { reasoning: '8', prm_score: 0.95 },
     rejected: { reasoning: '9', prm_score: 0.20 },
   });
-  const result = filterOutcomePairs([tight, wide], {
+  const result = filterOutcomePairs([declareGateJudge(tight), declareGateJudge(wide)], {
     rule: 'min_score_gap',
     minGap: 0.1,
   });
@@ -111,10 +153,10 @@ test('outcome-filter: min_score_gap drops records with only rejected.prm_score m
 });
 
 test('outcome-filter: min_score_gap uses default 0.20 when minGap is omitted (changed 2026-06-22 per ADR (internal) Repair 1)', () => {
-  const rec = makeRecord({
+  const rec = declareGateJudge(makeRecord({
     chosen: { reasoning: 'A', prm_score: 0.70 },
     rejected: { reasoning: 'B', prm_score: 0.55 },
-  });
+  }));
   // gap = 0.15, below 0.20 → drop
   const result = filterOutcomePairs([rec], { rule: 'min_score_gap' });
   assert.equal(result.kept.length, 0);
@@ -122,10 +164,10 @@ test('outcome-filter: min_score_gap uses default 0.20 when minGap is omitted (ch
 });
 
 test('outcome-filter: min_score_gap keeps records with gap >= 0.20 (new default)', () => {
-  const rec = makeRecord({
+  const rec = declareGateJudge(makeRecord({
     chosen: { reasoning: 'A', prm_score: 0.85 },
     rejected: { reasoning: 'B', prm_score: 0.50 },
-  });
+  }));
   // gap = 0.35, above 0.20 → keep
   const result = filterOutcomePairs([rec], { rule: 'min_score_gap' });
   assert.equal(result.kept.length, 1);
@@ -135,10 +177,10 @@ test('outcome-filter: min_score_gap directionality check — drops pairs where c
   // The exact pattern from ADR (internal) §Finding 1: PRM scoring inverts
   // chosen/rejected on hedging-vs-hallucination. The directionality
   // check catches these as a hard negative regardless of magnitude.
-  const inverted = makeRecord({
+  const inverted = declareGateJudge(makeRecord({
     chosen: { reasoning: 'A', prm_score: 0.75, prm_score_source: 'prm_judge' },
     rejected: { reasoning: 'B', prm_score: 0.80, prm_score_source: 'prm_judge' },
-  });
+  }));
   const result = filterOutcomePairs([inverted], { rule: 'min_score_gap' });
   assert.equal(result.dropped.length, 1);
   assert.equal(result.kept.length, 0);
@@ -150,10 +192,10 @@ test('outcome-filter: min_score_gap directionality check — drops pairs where c
   // gap = 0 — was previously dropped by magnitude gate (gap + epsilon
   // < minGap), now dropped explicitly by directionality check with a
   // clearer reason string.
-  const tied = makeRecord({
+  const tied = declareGateJudge(makeRecord({
     chosen: { reasoning: 'A', prm_score: 0.5 },
     rejected: { reasoning: 'B', prm_score: 0.5 },
-  });
+  }));
   const result = filterOutcomePairs([tied], { rule: 'min_score_gap' });
   assert.equal(result.dropped.length, 1);
   assert.match(result.dropped[0].reason, /^min_score_gap:inverted:0\.0000<=0$/);
@@ -171,11 +213,11 @@ test('outcome-filter: min_score_gap directionality check — catches ADR (intern
   // heuristic-vs-judge pair scored as if both were judge scores). The
   // directionality check itself is unchanged; only the fixture's score
   // source is now explicit.
-  const rec = makeRecord({
+  const rec = declareGateJudge(makeRecord({
     problem: 'What is AWARE 2.0?',
     chosen: { reasoning: 'hedged answer', prm_score: 0.75, prm_score_source: 'prm_judge' },
     rejected: { reasoning: 'confident answer', prm_score: 0.80, prm_score_source: 'prm_judge' },
-  });
+  }));
   const result = filterOutcomePairs([rec], { rule: 'min_score_gap', minGap: 0.20 });
   assert.equal(result.dropped.length, 1);
   assert.match(result.dropped[0].reason, /^min_score_gap:inverted:-0\.0500<=0$/);
@@ -189,11 +231,11 @@ test('outcome-filter: min_score_gap directionality check — catches ADR (intern
   // untagged chosen=0.60 was a legacy heuristic bucket, so this fixture
   // was reproducing the mixed-instrument defect rather than a genuinely
   // inverted judge-scored pair.
-  const rec = makeRecord({
+  const rec = declareGateJudge(makeRecord({
     problem: 'Reply with the single word: hello',
     chosen: { reasoning: 'some answer', prm_score: 0.60, prm_score_source: 'prm_judge' },
     rejected: { reasoning: 'hello', prm_score: 1.00, prm_score_source: 'prm_judge' },
-  });
+  }));
   const result = filterOutcomePairs([rec], { rule: 'min_score_gap', minGap: 0.20 });
   assert.equal(result.dropped.length, 1);
   assert.match(result.dropped[0].reason, /^min_score_gap:inverted:-0\.4000<=0$/);
@@ -346,7 +388,13 @@ test('outcome-filter: drops malformed records (null, string, number)', () => {
 
 test('outcome-filter: listFilterRules returns the canonical set', () => {
   const rules = listFilterRules();
-  assert.deepEqual(rules.sort(), ['azr_result', 'min_score_gap', 'noop', 'tag_match']);
+  assert.deepEqual(rules.sort(), [
+    'azr_result',
+    'min_score_gap',
+    'noop',
+    'require_independent_judge',
+    'tag_match',
+  ]);
 });
 
 test('outcome-filter: result shape is stable (kept, dropped, stats)', () => {

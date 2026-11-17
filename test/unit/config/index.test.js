@@ -255,8 +255,9 @@ test('config: snapshot() shape is stable', (t) => {
   ]);
   assert.deepEqual(Object.keys(snap.trainer).sort(), [
     'azrCorpusPath', 'baseModel', 'configPath', 'enabled', 'filterAllowedTaskTypes',
-    'filterMinGap', 'filterRule', 'gpuType', 'jobTimeoutSec',
-    'minPairsPerRun', 'modalTokenId', 'modalTokenSecret', 'pollIntervalSec', 'weightsDir',
+    'filterMinGap', 'filterRequireIndependentJudge', 'filterRule', 'gpuType',
+    'jobTimeoutSec', 'minPairsPerRun', 'modalTokenId', 'modalTokenSecret',
+    'pollIntervalSec', 'weightsDir',
   ]);
 });
 

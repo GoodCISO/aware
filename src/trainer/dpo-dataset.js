@@ -112,6 +112,9 @@ export function sameScoreInstrument(chosen, rejected) {
  *           from different instruments (the gap would be meaningless)
  * @property {number} nonIndependentJudge — pairs whose judge was not
  *           independent of the candidate (their verdict may not gate)
+ * @property {number} inverted — pairs whose chosen side scored at or below
+ *           their rejected side (the pair's labels contradict its own
+ *           numbers — a defect in the PAIR, not a judgement about quality)
  */
 
 /**
@@ -151,6 +154,7 @@ export function toDpoDataset(records, options = {}) {
     invalid: 0,
     mixedInstrument: 0,
     nonIndependentJudge: 0,
+    inverted: 0,
   };
   const seenHashes = new Set();
 
@@ -189,21 +193,47 @@ export function toDpoDataset(records, options = {}) {
     // The score-instrument PARITY check below is NOT affected -- it is about
     // the two sides being comparable at all (t_99423c45), not about
     // certifying quality, and it must keep running.
+    //
+    // NOTE: the counter for a demoted judge is incremented only when the
+    // pair is ADMITTED (see below, just before the row is pushed). Counting
+    // it here would report a DROPPED pair as "admitted on a diagnostic
+    // signal" in the trainer's rowsDiagnostic (src/trainer/index.js) --
+    // the operator would see a diagnostic count for pairs that never
+    // reached the training set.
     const judgeMayGate = mayJudgeGate(rec);
-    if (!judgeMayGate) {
-      skipped.nonIndependentJudge += 1;
-    }
     if (typeof chosenScore === 'number' && typeof rejectedScore === 'number') {
       if (!sameScoreInstrument(rec.chosen, rec.rejected)) {
         skipped.mixedInstrument += 1;
         continue;
       }
-      if (judgeMayGate) {
-        const gap = chosenScore - rejectedScore;
-        if (gap + 1e-9 < minScoreGap) {
-          skipped.lowGap += 1;
-          continue;
-        }
+      const gap = chosenScore - rejectedScore;
+      // DIRECTIONALITY (inverted pair) — 2026-11-17, kanban t_ebf7e27f.
+      //
+      // A pair whose chosen side scores at or BELOW its rejected side
+      // contradicts its own labels: the "rejected" attempt is the better one
+      // by the numbers on the record. That is a defect in the PAIR, not a
+      // judgement about quality -- the same reasoning the outcome filter
+      // gives at src/trainer/outcome-filter.js ("the pair's labels contradict
+      // its own numbers, which is a defect in the PAIR, not a judgement
+      // about quality"). It is therefore NOT demoted with the gap
+      // magnitude: it stays OUTSIDE the judgeMayGate guard, so it holds for
+      // every judge, including a same-family (non-gating) one.
+      //
+      // Before this check the assembler dropped an inverted pair only as a
+      // side effect of the magnitude gate, so the demotion of that gate
+      // (t_155a95a1) silently stopped dropping inverted pairs -- while the
+      // outcome filter kept dropping them. The two paths disagreed, and the
+      // `noop` filter rule let inverted pairs into the training set.
+      if (gap <= 0) {
+        skipped.inverted += 1;
+        continue;
+      }
+      // GAP MAGNITUDE — a quality certification, so it is demoted for a
+      // judge that may not gate (t_155a95a1). The signal is not lost: it
+      // stays on the record and the filter reports it as a diagnostic.
+      if (judgeMayGate && gap + 1e-9 < minScoreGap) {
+        skipped.lowGap += 1;
+        continue;
       }
     }
     // dedupeByHash filter — first occurrence wins. Honors content
@@ -214,6 +244,12 @@ export function toDpoDataset(records, options = {}) {
         continue;
       }
       seenHashes.add(rec._content_hash);
+    }
+    // The pair is ADMITTED. Only now is the demoted-judge signal counted,
+    // because it is a count of pairs admitted WITHOUT their score being
+    // allowed to gate -- not a count of pairs the assembler looked at.
+    if (!judgeMayGate) {
+      skipped.nonIndependentJudge += 1;
     }
     rows.push({
       prompt: [{ role: 'user', content: rec.problem }],

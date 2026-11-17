@@ -52,6 +52,9 @@ test('dpo-dataset: empty input returns empty rows, zero skipped', () => {
   // score-instrument parity guard.
   assert.deepEqual(result.skipped, {
     lowGap: 0, duplicate: 0, invalid: 0, mixedInstrument: 0, nonIndependentJudge: 0,
+    // inverted was added 2026-11-17 (kanban t_ebf7e27f) alongside the
+    // directionality check in the assembler.
+    inverted: 0,
   });
 });
 
@@ -174,15 +177,21 @@ test('dpo-dataset: minScoreGap also drops inverted pairs (gap < 0)', () => {
   // Note: outcome-filter.js now has a directionality check that catches
   // these upstream. This test confirms dpo-dataset also catches them,
   // providing defense in depth.
+  //
+  // Since t_ebf7e27f the drop is counted as `inverted` rather than
+  // `lowGap`: the directionality check now runs for EVERY judge, before the
+  // magnitude gate, so the reason for the drop is explicit instead of being
+  // a side effect of the magnitude comparison.
   const inverted = makeRecord({
     chosen: { reasoning: 'hedged', prm_score: 0.75, prm_score_source: 'prm_judge' },
     rejected: { reasoning: 'confident', prm_score: 0.80, prm_score_source: 'prm_judge' },
     _content_hash: 'h-inverted',
   });
   const result = toDpoDataset([declareGateJudge(inverted)]);
-  // gap = -0.05 < 0.05 → drop
+  // gap = -0.05 → drop
   assert.equal(result.rows.length, 0);
-  assert.equal(result.skipped.lowGap, 1);
+  assert.equal(result.skipped.inverted, 1);
+  assert.equal(result.skipped.lowGap, 0);
 });
 
 // -- dedupeByHash -------------------------------------------------------

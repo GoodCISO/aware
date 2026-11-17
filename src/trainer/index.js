@@ -640,7 +640,8 @@ export class TrainerPoller {
     return {
       rowsWritten: rows.length,
       rowsDropped: skipped.lowGap + skipped.duplicate + skipped.invalid +
-        skipped.mixedInstrument + filterResult.dropped.length,
+        skipped.mixedInstrument + (skipped.inverted || 0) +
+        filterResult.dropped.length,
       // Pairs admitted on a demoted (diagnostic) signal — reported alongside
       // the drop count so the operator sees that the score did not gate.
       rowsDiagnostic: filterResult.diagnostics.length +

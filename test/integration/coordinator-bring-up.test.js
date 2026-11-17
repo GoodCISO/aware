@@ -20,11 +20,17 @@
 //
 // Prereqs to run locally:
 //   - docker + colima up
-//   - AWARE_RL_PIPELINE_REPO pointing at a working git remote (default: local
-//     Gitea at http://git.internal/rl-pipeline.git, tag v0.2.2)
 //   - LLM_API_KEY (or PROVIDER_API_KEY) for the live LLM call
 //   - AWARE_COORDINATOR_TOKEN (>=32 chars)
 //   - Port 38181 free on the host (colima SSH holds 18081 + 28181)
+//
+// 2026-11-17 (t_091892e3): the rl-pipeline build args are GONE. The image
+// ships the repo's own vendored copy (backend/heavy-think/src), so the
+// build needs no git remote and no tag. The test used to pass
+// AWARE_RL_PIPELINE_REPO / AWARE_RL_PIPELINE_TAG to `docker compose build`;
+// passing them now is harmless but meaningless, so they are removed —
+// otherwise the bring-up gate keeps asserting a build shape the Dockerfile
+// no longer has.
 
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
@@ -35,9 +41,6 @@ import { existsSync } from 'node:fs';
 const REPO_ROOT = new URL('../..', import.meta.url).pathname;
 const BRING_UP_GATE = process.env.AWARE_BRINGUP_OK === '1';
 
-const AWARE_RL_PIPELINE_REPO = process.env.AWARE_RL_PIPELINE_REPO
-  || 'http://git.internal/rl-pipeline.git';
-const AWARE_RL_PIPELINE_TAG = process.env.AWARE_RL_PIPELINE_TAG || 'v0.2.2';
 // 38181 is the remapped host port (colima SSH holds 18081 + 28181).
 const COORDINATOR_PORT = 38181;
 
@@ -81,12 +84,12 @@ if (!shouldRun) {
     // Tear down any leftover state from a previous failed run.
     docker(['compose', '-f', 'docker-compose.coordinator.yml', '-p', 'aware-2', 'down', '-v']);
 
-    // Build the coordinator image with the rl-pipeline build args.
-    log('building coordinator image (AWARE_RL_PIPELINE_TAG=' + AWARE_RL_PIPELINE_TAG + ')...');
+    // Build the coordinator image. It ships the repo's vendored rl-pipeline
+    // copy, so there are no rl-pipeline build args to pass.
+    log('building coordinator image...');
     const buildRes = docker(
       ['compose', '-f', 'docker-compose.coordinator.yml', '-p', 'aware-2',
        'build', '--no-cache', 'coordinator'],
-      { env: Object.assign({}, process.env, { AWARE_RL_PIPELINE_REPO: AWARE_RL_PIPELINE_REPO, AWARE_RL_PIPELINE_TAG: AWARE_RL_PIPELINE_TAG }) },
     );
     if (buildRes.status !== 0) {
       throw new Error('coordinator image build failed: ' + buildRes.stderr);
@@ -96,7 +99,6 @@ if (!shouldRun) {
     log('bringing stack up...');
     const upRes = docker(
       ['compose', '-f', 'docker-compose.coordinator.yml', '-p', 'aware-2', 'up', '-d'],
-      { env: Object.assign({}, process.env, { AWARE_RL_PIPELINE_REPO: AWARE_RL_PIPELINE_REPO, AWARE_RL_PIPELINE_TAG: AWARE_RL_PIPELINE_TAG }) },
     );
     if (upRes.status !== 0) {
       throw new Error('compose up failed: ' + upRes.stderr);

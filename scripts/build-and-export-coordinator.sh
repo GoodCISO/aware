@@ -1,26 +1,17 @@
 #!/usr/bin/env bash
 # build-and-export-coordinator.sh
-# Build the AWARE coordinator image on a host that has DNS access to the
-# internal git server, then export it as a tarball so it can be `docker load`-ed
-# into a colima/dev host that doesn't have that DNS access.
+# Build the AWARE coordinator image, then export it as a tarball so it can be
+# `docker load`-ed into a colima/dev host.
 #
-# Run this on the BUILD HOST (must be able to reach AWARE_RL_PIPELINE_REPO).
-# Then `docker load` the tarball on the dev host.
+# 2026-11-17 (t_091892e3): the build no longer clones rl-pipeline from an
+# external git server, so it no longer needs a host with DNS access to one.
+# The image ships the repo's own vendored copy (backend/heavy-think/src).
 
 set -euo pipefail
 
 # ─── Configuration ──────────────────────────────────────────────────────────
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
-
-# Required: the git URL that Dockerfile.coordinator clones from. The
-# "internal git" is the operator's local mirror of the rl-pipeline repo
-# at the v0.2.2 tag — set AWARE_RL_PIPELINE_REPO to whichever URL your
-# build host can reach (e.g. an internal Gitea, GitHub, or other mirror).
-: "${AWARE_RL_PIPELINE_REPO:?AWARE_RL_PIPELINE_REPO must be set to a git URL the build host can reach}"
-
-# Optional: pin to a specific rl-pipeline tag. Default matches compose file.
-AWARE_RL_PIPELINE_TAG="${AWARE_RL_PIPELINE_TAG:-v0.2.2}"
 
 # Optional: output tarball path. Default: ./aware-coordinator-<timestamp>.tar
 OUTPUT_TAR="${OUTPUT_TAR:-./aware-coordinator-$(date +%Y%m%d-%H%M%S).tar}"
@@ -33,8 +24,6 @@ COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.coordinator.yml}"
 # ─── Preflight ──────────────────────────────────────────────────────────────
 echo "=== AWARE coordinator build-and-export ==="
 echo "REPO_ROOT:        $REPO_ROOT"
-echo "AWARE_RL_PIPELINE_REPO: $AWARE_RL_PIPELINE_REPO"
-echo "AWARE_RL_PIPELINE_TAG:  $AWARE_RL_PIPELINE_TAG"
 echo "IMAGE_TAG:        $IMAGE_TAG"
 echo "OUTPUT_TAR:       $OUTPUT_TAR"
 echo "COMPOSE_PROJECT:  $COMPOSE_PROJECT"
@@ -68,17 +57,27 @@ echo "  ✓ /data/audit mkdir in Dockerfile.coordinator"
 echo "  ✓ src/audit/package.json with commonjs type"
 echo ""
 
-# Verify DNS resolution to the internal git server.
-echo "=== Verifying DNS access to internal git ==="
-git_host="$(echo "$AWARE_RL_PIPELINE_REPO" | sed -E 's|^https?://([^/]+)/.*|\1|; s|^git@([^:]+):.*|\1|')"
-if ping -c1 -W2 "$git_host" >/dev/null 2>&1; then
-  echo "  ✓ $git_host is reachable"
-else
-  echo "ERROR: $git_host is not reachable from this host." >&2
-  echo "This script must run on a host that can resolve the internal git." >&2
+# Verify the rl-pipeline copy the image ships is the repo's own vendored
+# tree. The build no longer clones rl-pipeline from an external git server,
+# so there is no remote to reach and no tag to bump — but the vendored tree
+# MUST exist, or the image would ship an empty /app/rl-pipeline and the
+# coordinator would fail to import it at runtime.
+test -f backend/heavy-think/src/verify.js || {
+  echo "ERROR: backend/heavy-think/src/verify.js is missing." >&2
+  echo "The image ships the repo's vendored rl-pipeline copy; without it the" >&2
+  echo "coordinator has no judge path to load." >&2
   exit 1
-fi
+}
+test -f backend/heavy-think/src/index.js || {
+  echo "ERROR: backend/heavy-think/src/index.js is missing." >&2
+  exit 1
+}
+echo "  ✓ vendored rl-pipeline tree present (backend/heavy-think/src)"
 echo ""
+
+# 2026-11-17 (t_091892e3): the DNS-access preflight for the internal git
+# server is GONE. The build no longer clones rl-pipeline from a git remote,
+# so the build host needs no DNS access to one.
 
 # ─── Build ──────────────────────────────────────────────────────────────────
 echo "=== Building image (no cache) ==="

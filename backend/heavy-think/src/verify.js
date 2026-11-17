@@ -48,7 +48,7 @@ Reply with strict JSON and nothing else:
 
 const JUDGE_TASK_SEPARATOR = '\n\n---\n\n';
 
-export async function verify({ trace, verification, context, client, problem }) {
+export async function verify({ trace, verification, context, client, judgeClient, problem }) {
   const start = Date.now();
   const method = verification?.method;
 
@@ -59,7 +59,7 @@ export async function verify({ trace, verification, context, client, problem }) 
         `verify: unknown method '${method}' (implemented methods: ${VERIFICATION_METHOD_NAMES.join(', ')})`
       );
     }
-    const result = await impl(trace, verification, context, { client, problem });
+    const result = await impl(trace, verification, context, { client, judgeClient, problem });
     return { ...result, duration_ms: Date.now() - start };
   } catch (err) {
     return {
@@ -183,15 +183,23 @@ async function verifyKG(trace, verification, context) {
 //     than noisy: stable across repeats but missing most bad traces. The
 //     confidence threshold is the knob for that; the default threshold is
 //     deliberately neutral and should be tuned against a labelled set.
-async function verifyLLMJudge(trace, verification, context, { client, problem }) {
+async function verifyLLMJudge(trace, verification, context, { client, judgeClient, problem }) {
   const method = 'llm-judge';
 
-  if (!client || typeof client.generate !== 'function') {
+  // WHICH client serves the judge (kanban t_89720a07). An independent
+  // judgeClient takes the call; the producer's client is only the
+  // fallback when NO judge client was configured at all. A configured
+  // judge client that is unavailable fails closed below — the call is
+  // never re-routed to the candidate's model.
+  const judge = judgeClient || client;
+  const judgeConfigured = Boolean(judgeClient);
+
+  if (!judge || typeof judge.generate !== 'function') {
     return {
       passed: false,
       method,
       details: {
-        error: 'llm-judge requires an LLM client (pass { client } to verify()/heavy_think)',
+        error: 'llm-judge requires an LLM client (pass { client } or { judgeClient } to verify()/heavy_think)',
       },
     };
   }
@@ -212,12 +220,20 @@ async function verifyLLMJudge(trace, verification, context, { client, problem })
 
   let judged;
   try {
-    judged = await generateJudge(client, prompt, opts);
+    judged = await generateJudge(judge, prompt, opts);
   } catch (err) {
     return {
       passed: false,
       method,
-      details: { error: `llm-judge: judge call failed: ${err.message}` },
+      details: {
+        error: `llm-judge: judge call failed: ${err.message}`,
+        // Which client was supposed to serve the verdict, and whether it
+        // was an independent one (kanban t_89720a07). A configured judge
+        // that failed is the fail-closed case: the verdict is lost, not
+        // taken from the candidate's model.
+        judge_client_source: judgeConfigured ? 'judge' : 'producer_fallback',
+        judge_model: judge.model || null,
+      },
     };
   }
 
@@ -244,7 +260,10 @@ async function verifyLLMJudge(trace, verification, context, { client, problem })
       threshold,
       reason: verdict.reason,
       prompt_shape: judged.promptShape,
-      model: client.model || null,
+      model: judge.model || null,
+      // Whether the verdict came from an INDEPENDENT judge client or from
+      // the producer's own client (kanban t_89720a07).
+      judge_client_source: judgeConfigured ? 'judge' : 'producer_fallback',
       cost_usd: judged.cost_usd || 0,
     },
   };

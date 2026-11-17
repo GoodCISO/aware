@@ -40,7 +40,7 @@ test('config: validate() REFUSES a judge model identical to the candidate model'
   const config = require('../../../src/config/index.cjs');
   assert.throws(
     () => config.validate(),
-    /AWARE_JUDGE_MODEL \(MiniMax-M3\.1-Flash\) must differ from AWARE_PROVIDER_MODEL/,
+    /AWARE_JUDGE_MODEL \(MiniMax-M3\.1-Flash\) must be a different model family from AWARE_PROVIDER_MODEL/,
   );
 });
 
@@ -48,7 +48,20 @@ test('config: the same-family refusal is case- and separator-insensitive', () =>
   process.env.AWARE_PROVIDER_MODEL = 'MiniMax-M3.1-Flash';
   process.env.AWARE_JUDGE_MODEL = 'minimax m3 1 flash';
   const config = require('../../../src/config/index.cjs');
-  assert.throws(() => config.validate(), /must differ from AWARE_PROVIDER_MODEL/);
+  assert.throws(() => config.validate(), /must be a different model family from AWARE_PROVIDER_MODEL/);
+});
+
+test('config: validate() REFUSES a CHEAPER SIBLING of the candidate model', () => {
+  // t_2a91cc4b: the refusal compares MODEL FAMILIES, not model ids. A
+  // sibling from the same family was accepted by the id-equality test and
+  // would have been allowed to gate the DPO set.
+  process.env.AWARE_PROVIDER_MODEL = 'MiniMax-M3.1-Flash';
+  process.env.AWARE_JUDGE_MODEL = 'MiniMax-M3';
+  const config = require('../../../src/config/index.cjs');
+  assert.throws(
+    () => config.validate(),
+    /AWARE_JUDGE_MODEL \(MiniMax-M3\) must be a different model family from AWARE_PROVIDER_MODEL/,
+  );
 });
 
 test('config: validate() ACCEPTS a judge model from a different family', () => {
@@ -64,6 +77,21 @@ test('config: validate() REFUSES an Ollama judge pointing at the AWARE-trained L
   assert.throws(
     () => config.validate(),
     /AWARE_JUDGE_OLLAMA_MODEL \(aware-qwen35-9b:latest\) must not be the AWARE-trained LoRA artefact/,
+  );
+});
+
+test('config: validate() REFUSES the LoRA artefact as a PROVIDER judge, naming the real reason', () => {
+  // t_2a91cc4b: the corpus-trained artefact is never independent of ANY
+  // candidate, so the family comparison refuses it too — but with the wrong
+  // reason ("same family as the candidate"). The specific refusal must not
+  // be shadowed by the general one: the operator is told the artefact is the
+  // model the preference pairs TRAIN.
+  process.env.AWARE_PROVIDER_MODEL = 'MiniMax-M3.1-Flash';
+  process.env.AWARE_JUDGE_MODEL = 'aware-qwen35-9b';
+  const config = require('../../../src/config/index.cjs');
+  assert.throws(
+    () => config.validate(),
+    /AWARE_JUDGE_MODEL \(aware-qwen35-9b\) must not be the AWARE-trained LoRA artefact/,
   );
 });
 

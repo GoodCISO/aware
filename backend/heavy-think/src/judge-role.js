@@ -1,5 +1,5 @@
 // src/judge-role.js — declare the ROLE of a judge score on every preference pair
-// (kanban t_155a95a1).
+// (kanban t_155a95a1; family comparison fixed by t_2a91cc4b).
 //
 // WHY THIS EXISTS
 // ---------------
@@ -33,14 +33,33 @@
 // INDEPENDENCE IS COMPUTED, NOT ASSERTED
 // ---------------------------------------
 // `prm_score_independent` is a FACT about the client that served the judge,
-// derived by comparing the judge's model id against the candidate's. A
+// derived by comparing the judge's model FAMILY against the candidate's. A
 // different serving path or a cheaper sibling is still the same family
-// (audit t_8f049433 section 5.1: "What must NOT count as independence"), so
-// the comparison is on the model id and nothing else.
+// (audit t_8f049433 section 5.1: "What must NOT count as independence").
+//
+// The FAMILY comparison lives in `src/judge-family.js` — the canonical
+// source for the family map. This module compares families, not model ids:
+// an id comparison misses a cheaper sibling (`MiniMax-M3` judging
+// `MiniMax-M3.1-Flash`), which is the defect t_2a91cc4b closed.
 //
 // Likewise, an explicit `role` request is honoured ONLY for an independent
 // judge: a same-family judge is a diagnostic no matter what the caller asks
 // for, because 04:187-190 says so in those words.
+
+import {
+  isIndependentJudge,
+} from './judge-family.js';
+
+export {
+  normaliseModelId,
+  sameModelFamily,
+  isIndependentJudge,
+  modelFamily,
+  resolveModelFamily,
+  isCorpusTrainedArtefact,
+  MODEL_FAMILY_RULES,
+  MODEL_FAMILY_GROUPS,
+} from './judge-family.js';
 
 /**
  * The three roles, exactly as named in 04-ai-product-evaluation.md:16-21.
@@ -49,8 +68,8 @@ export const JUDGE_ROLES = Object.freeze(['launch_gate', 'diagnostic', 'guardrai
 
 /**
  * The role a judge gets when it is not known to be independent of the
- * candidate. `04:35-36`: "If you cannot name which of the three it is, it is
- * a diagnostic." The safe default is the one that cannot gate.
+ * candidate. `04:35-36`: "If you cannot name which of the three it is, it
+ * is a diagnostic." The safe default is the one that cannot gate.
  */
 export const DEFAULT_JUDGE_ROLE = 'diagnostic';
 
@@ -71,42 +90,6 @@ export function isJudgeRole(role) {
 }
 
 /**
- * Normalise a model id for the family comparison.
- *
- * The same family can be spelled differently across providers
- * (`MiniMax-M3.1-Flash` vs `minimax-M3.1-flash`), so the comparison is
- * case-insensitive and ignores separators. We deliberately do NOT model a
- * provider's full model lineage: an over-eager match would declare two
- * genuinely different models "same family" and silently demote a legitimate
- * gate. Comparing the normalised id is the conservative direction -- it
- * under-claims independence.
- *
- * @param {*} model
- * @returns {string} the normalised id, or '' when there is no model id
- */
-export function normaliseModelId(model) {
-  if (typeof model !== 'string') return '';
-  return model.toLowerCase().replace(/[^a-z0-9]+/g, '');
-}
-
-/**
- * True when `judgeModel` is the same model family as `candidateModel`.
- *
- * @param {*} candidateModel
- * @param {*} judgeModel
- * @returns {boolean} false when either id is unknown (absence of evidence
- *   is not evidence of sameness -- but it is also not evidence of
- *   independence, which is why `describeJudge` treats an unknown judge id as
- *   NOT independent).
- */
-export function sameModelFamily(candidateModel, judgeModel) {
-  const a = normaliseModelId(candidateModel);
-  const b = normaliseModelId(judgeModel);
-  if (!a || !b) return false;
-  return a === b;
-}
-
-/**
  * Describe the judge that produced a score.
  *
  * @param {Object} [opts]
@@ -121,10 +104,18 @@ export function describeJudge(opts = {}) {
   const candidateModel = opts.candidateModel ?? null;
   const judgeModel = opts.judgeModel ?? null;
 
-  // Independence is computed from the model ids. An unknown judge id is NOT
-  // independent: "cannot name the judge" is not evidence of independence.
-  const judgeId = normaliseModelId(judgeModel);
-  const independent = judgeId !== '' && !sameModelFamily(candidateModel, judgeModel);
+  // Independence is computed from the model FAMILIES. A judge whose family
+  // cannot be named is NOT independent: "cannot name the judge" is not
+  // evidence of independence. Symmetrically, a judge cannot be shown to be
+  // in a DIFFERENT family when the CANDIDATE's family cannot be named —
+  // "cannot place the candidate" is not evidence of independence either.
+  //
+  // The AWARE-trained LoRA artefact is NEVER independent, whatever the
+  // candidate's family: it is the model the preference pairs TRAIN, so a
+  // judge that is it is scoring with a model trained on the corpus it
+  // selects (t_8f049433 section 5.1 -- "independence in the wrong
+  // direction").
+  const independent = isIndependentJudge(candidateModel, judgeModel);
 
   // The role. Independence is NECESSARY for a gate, not SUFFICIENT -- a gate
   // still has to be declared as one. But a same-family judge can never be

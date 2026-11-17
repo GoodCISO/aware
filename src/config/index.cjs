@@ -31,6 +31,18 @@
 const path = require('node:path');
 const os = require('node:os');
 
+// The model-family map used by the judge's independence guard. The
+// CANONICAL source is the producer's module
+// (backend/heavy-think/src/judge-family.js); this module is the CommonJS
+// mirror used when that vendored copy is absent (the published npm package
+// ships src/config/ but NOT backend/). The mirror prefers the LIVE vendored
+// module when it is present — see ./judge-family.cjs.
+// (kanban t_2a91cc4b)
+const {
+  isIndependentJudge,
+  isCorpusTrainedArtefact,
+} = require('./judge-family.cjs');
+
 // --- helpers ------------------------------------------------------------
 
 function str(name, fallback) {
@@ -369,12 +381,15 @@ config.validate = function validate() {
       );
     }
   }
-  // The INDEPENDENT JUDGE must be a different model family from the
-  // candidate (kanban t_89720a07, audit t_8f049433 §3.2 / §5.1). Two
-  // refusals, both hard:
+  // The INDEPENDENT JUDGE must be a different model FAMILY from the
+  // candidate (kanban t_89720a07, audit t_8f049433 §3.2 / §5.1; family
+  // comparison fixed by t_2a91cc4b). Two refusals, both hard:
   //
-  //   1. A judge model identical to the candidate's model — the judge
-  //      would be grading its own house style.
+  //   1. A judge model from the candidate's own model FAMILY — the judge
+  //      would be grading its own house style. The comparison is on the
+  //      FAMILY, not on the id: a cheaper sibling (`MiniMax-M3` against
+  //      `MiniMax-M3.1-Flash`) is the same family and must be refused
+  //      too. An id-equality test misses it.
   //   2. An Ollama judge pointing at `aware-qwen35-9b` — the AWARE-LoRA
   //      merged artefact, i.e. the model the preference pairs TRAIN. A
   //      judge trained on the corpus it selects is not independent, and
@@ -382,17 +397,32 @@ config.validate = function validate() {
   //
   // Both are refused at config time rather than degrading silently: a
   // judge that cannot be independent must not be configurable as one.
+  //
+  // The family map is the PRODUCER's module (backend/heavy-think/src/
+  // judge-family.js) via the mirror in ./judge-family.cjs, so this
+  // config-time guard and the producer's runtime guard cannot disagree.
   const judgeModel = config.model.judgeModel;
   if (judgeModel) {
     const candidate = config.model.providerModel;
-    if (normaliseModelId(judgeModel) === normaliseModelId(candidate)) {
+    // The corpus-trained artefact is checked FIRST: it is never independent
+    // of anything, so the family comparison would refuse it too — but with
+    // the WRONG reason ("same family as the candidate"), when the real
+    // reason is that it is the model the preference pairs TRAIN. Naming the
+    // real reason is the point of this guard, so the specific check must
+    // not be shadowed by the general one.
+    if (isCorpusTrainedArtefact(judgeModel)) {
       throw new Error(
-        `Config: AWARE_JUDGE_MODEL (${judgeModel}) must differ from AWARE_PROVIDER_MODEL (${candidate}) — a judge in the candidate's own model family grades its own house style and can never gate the DPO set`
+        `Config: AWARE_JUDGE_MODEL (${judgeModel}) must not be the AWARE-trained LoRA artefact — it is the model the preference pairs train, so it cannot judge them independently`
+      );
+    }
+    if (!isIndependentJudge(candidate, judgeModel)) {
+      throw new Error(
+        `Config: AWARE_JUDGE_MODEL (${judgeModel}) must be a different model family from AWARE_PROVIDER_MODEL (${candidate}) — a judge in the candidate's own model family grades its own house style and can never gate the DPO set`
       );
     }
   }
   const judgeOllama = config.model.judgeOllamaModel;
-  if (judgeOllama && isAwareTrainedOllamaModel(judgeOllama)) {
+  if (judgeOllama && isCorpusTrainedArtefact(judgeOllama)) {
     throw new Error(
       `Config: AWARE_JUDGE_OLLAMA_MODEL (${judgeOllama}) must not be the AWARE-trained LoRA artefact — it is the model the preference pairs train, so it cannot judge them independently`
     );
@@ -523,36 +553,6 @@ config.snapshot = function snapshot() {
 };
 
 // --- judge independence helpers ---------------------------------------
-
-/**
- * Normalise a model id for the family comparison. The same family can be
- * spelled differently across providers (`MiniMax-M3.1-Flash` vs
- * `minimax-M3.1-flash`), so the comparison is case-insensitive and
- * ignores separators.
- *
- * @param {*} model
- * @returns {string} the normalised id, or '' when there is no model id
- */
-function normaliseModelId(model) {
-  if (typeof model !== 'string') return '';
-  return model.toLowerCase().replace(/[^a-z0-9]+/g, '');
-}
-
-/**
- * True when `model` names the AWARE-tuned LoRA artefact — the merged
- * Qwen3.5-9B build the preference pairs train. Such a model cannot judge
- * those pairs independently.
- *
- * @param {*} model
- * @returns {boolean}
- */
-function isAwareTrainedOllamaModel(model) {
-  const id = normaliseModelId(model);
-  if (!id) return false;
-  // `aware-qwen35-9b`, `aware-qwen35-9b:latest`, `aware-qwen35-9b-q4_k_m`
-  // all name the same artefact. A non-AWARE prefix is a different model.
-  return id.startsWith('awareqwen359b');
-}
 
 module.exports = config;
 module.exports.default = config;

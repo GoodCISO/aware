@@ -566,6 +566,17 @@ export class TrainerPoller {
     // 3. Apply the outcome filter (default: noop)
     const filterRule = config.trainer.filterRule || 'noop';
     const filterOptions = { rule: filterRule };
+    // Judge independence is an ORTHOGONAL precondition, not a rule: it
+    // composes with whichever rule is active, so the score-instrument
+    // parity checks keep running alongside it (kanban t_155a95a1).
+    const requireIndependentJudge = String(
+      config.trainer.filterRequireIndependentJudge || '0'
+    ).toLowerCase() === '1' || String(
+      config.trainer.filterRequireIndependentJudge || '0'
+    ).toLowerCase() === 'true';
+    if (requireIndependentJudge) {
+      filterOptions.requireIndependentJudge = true;
+    }
     if (filterRule === 'min_score_gap') {
       filterOptions.minGap = config.trainer.filterMinGap;
     } else if (filterRule === 'tag_match') {
@@ -573,6 +584,10 @@ export class TrainerPoller {
       filterOptions.allowedTaskTypes = raw
         ? raw.split(',').map(s => s.trim()).filter(Boolean)
         : [];
+    } else if (filterRule === 'require_independent_judge') {
+      // The standalone rule: drop every pair whose judge was not
+      // independent. Composes with the orthogonally-set
+      // requireIndependentJudge precondition (both check the same fact).
     } else if (filterRule === 'azr_result') {
       // Phase 4 deliverable 1: load the AZR pass index from the
       // aware_azr_results table. The index is filtered to
@@ -586,7 +601,23 @@ export class TrainerPoller {
       this.deps.logger.debug(
         `outcome-filter dropped ${filterResult.dropped.length}/${allRecords.length} ` +
         `records (rule=${filterRule}); first reasons: ` +
-        filterResult.dropped.slice(0, 3).map(d => d.reason).join(', ')
+        `${filterResult.dropped.slice(0, 3).map(d => d.reason).join(', ')}`
+      );
+    }
+    // DIAGNOSTIC SIGNAL (kanban t_155a95a1). Pairs admitted WITHOUT their
+    // score being allowed to gate — the judge was not independent of the
+    // candidate, so its verdict is a diagnostic, never a launch gate
+    // (04-ai-product-evaluation.md:187-190). The gap is preserved on the
+    // record; this line makes the demotion VISIBLE to the operator, because
+    // a gate that silently stopped gating is the failure mode this card
+    // exists to prevent.
+    if (filterResult.diagnostics.length > 0) {
+      this.deps.logger.warn(
+        `outcome-filter admitted ${filterResult.diagnostics.length}/${allRecords.length} ` +
+        `records on a DIAGNOSTIC signal (rule=${filterRule}, ` +
+        `requireIndependentJudge=${requireIndependentJudge}); their judge was not ` +
+        `independent, so the score did not gate; first reasons: ` +
+        `${filterResult.diagnostics.slice(0, 3).map(d => d.reason).join(', ')}`
       );
     }
 
@@ -609,7 +640,12 @@ export class TrainerPoller {
     return {
       rowsWritten: rows.length,
       rowsDropped: skipped.lowGap + skipped.duplicate + skipped.invalid +
-        skipped.mixedInstrument + filterResult.dropped.length,
+        skipped.mixedInstrument + (skipped.inverted || 0) +
+        filterResult.dropped.length,
+      // Pairs admitted on a demoted (diagnostic) signal — reported alongside
+      // the drop count so the operator sees that the score did not gate.
+      rowsDiagnostic: filterResult.diagnostics.length +
+        (skipped.nonIndependentJudge || 0),
       sourceFilesRead: pairPaths.length,
     };
   }

@@ -174,6 +174,29 @@ const config = {
     // and the cheapest per call, and the PRM judge is only ranking
     // attempts — not producing them.
     get providerModel() { return str('AWARE_PROVIDER_MODEL', 'MiniMax-M3.1-Flash'); },
+    // --- INDEPENDENT JUDGE (kanban t_89720a07) ---
+    //
+    // The judge that scores a candidate must be a DIFFERENT model family
+    // from the candidate it grades, reached through a SEPARATELY configured
+    // client. Audit t_8f049433 measured that AWARE had no mechanism by
+    // which a judge could be independent of the candidate — not merely
+    // none configured, but none implementable via configuration.
+    //
+    // AWARE_JUDGE_MODEL names the judge model. Unset = no judge client is
+    // configured and the producer's own client judges (same-family by
+    // construction). The pair record says which happened.
+    get judgeModel() { return str('AWARE_JUDGE_MODEL', ''); },
+    // The judge runs against its own endpoint and its own credential. When
+    // AWARE_JUDGE_API_KEY is unset the judge's key falls back to the
+    // producer's (LLM_API_KEY) — usable, but the operator should be aware
+    // the judge is not credential-isolated.
+    get judgeApiKey() { return str('AWARE_JUDGE_API_KEY', undefined); },
+    get judgeApiHost() { return str('AWARE_JUDGE_API_HOST', undefined); },
+    // An Ollama-hosted judge. This must NOT be the AWARE-tuned LoRA
+    // artefact (`aware-qwen35-9b`), which is the model the preference
+    // pairs train — a judge trained on the corpus it selects is not
+    // independent (audit t_8f049433 §3.2).
+    get judgeOllamaModel() { return str('AWARE_JUDGE_OLLAMA_MODEL', ''); },
     get ollamaUrl() { return str('OLLAMA_URL', 'http://127.0.0.1:11434'); },
     // Timeout for a single Ollama generation request.
     // The previous hardcoded 5_000ms default was a coin-flip against
@@ -271,6 +294,23 @@ const config = {
     // values to keep (comma-separated env var). Empty default =
     // "operator hasn't decided yet" → keep all (see outcome-filter.js).
     get filterAllowedTaskTypes() { return str('AWARE_TRAINER_FILTER_ALLOWED_TASK_TYPES', ''); },
+    // Require an INDEPENDENT judge on every pair the filter admits
+    // (2026-11-17, kanban t_155a95a1).
+    //
+    // The producer writes `prm_score_independent` on every preference pair.
+    // Today the judge IS the producer's client, so every pair is same-family
+    // and therefore NOT independent -- and under
+    // `04-ai-product-evaluation.md:187-190` a same-family verdict is a
+    // DIAGNOSTIC, never a launch gate. Setting this to '1' makes the filter
+    // drop every pair whose judge was not independent.
+    //
+    // It is ORTHOGONAL to `filterRule`: set it alongside
+    // AWARE_TRAINER_FILTER_RULE=min_score_gap to get "independent judge AND
+    // same-instrument AND a wide enough gap", rather than replacing the
+    // parity checks. Default '0' = the operator has not required it.
+    get filterRequireIndependentJudge() {
+      return str('AWARE_TRAINER_FILTER_REQUIRE_INDEPENDENT_JUDGE', '0');
+    },
     // Phase 4 (the AWARE 2.0 Architecture ADR (internal) 618-627) AZR self-play corpus path. When set,
     // the trainer records it on aware_training_runs.azr_corpus_path
     // and ingests per-record results into aware_azr_results at
@@ -328,6 +368,34 @@ config.validate = function validate() {
         'Config: AWARE_COORDINATOR_TOKEN is required and must be ≥32 chars when NODE_ENV=production (SEC-002; production hardening). Set it in the env_file / compose service env, or run with NODE_ENV≠production (development only).'
       );
     }
+  }
+  // The INDEPENDENT JUDGE must be a different model family from the
+  // candidate (kanban t_89720a07, audit t_8f049433 §3.2 / §5.1). Two
+  // refusals, both hard:
+  //
+  //   1. A judge model identical to the candidate's model — the judge
+  //      would be grading its own house style.
+  //   2. An Ollama judge pointing at `aware-qwen35-9b` — the AWARE-LoRA
+  //      merged artefact, i.e. the model the preference pairs TRAIN. A
+  //      judge trained on the corpus it selects is not independent, and
+  //      the independence is in the wrong direction.
+  //
+  // Both are refused at config time rather than degrading silently: a
+  // judge that cannot be independent must not be configurable as one.
+  const judgeModel = config.model.judgeModel;
+  if (judgeModel) {
+    const candidate = config.model.providerModel;
+    if (normaliseModelId(judgeModel) === normaliseModelId(candidate)) {
+      throw new Error(
+        `Config: AWARE_JUDGE_MODEL (${judgeModel}) must differ from AWARE_PROVIDER_MODEL (${candidate}) — a judge in the candidate's own model family grades its own house style and can never gate the DPO set`
+      );
+    }
+  }
+  const judgeOllama = config.model.judgeOllamaModel;
+  if (judgeOllama && isAwareTrainedOllamaModel(judgeOllama)) {
+    throw new Error(
+      `Config: AWARE_JUDGE_OLLAMA_MODEL (${judgeOllama}) must not be the AWARE-trained LoRA artefact — it is the model the preference pairs train, so it cannot judge them independently`
+    );
   }
   // Force-evaluate all lazy accessors so a bad value fails at validate(),
   // not at first request.
@@ -398,6 +466,14 @@ config.snapshot = function snapshot() {
       providerModel: c.model.providerModel,
       ollamaUrl: c.model.ollamaUrl,
       ollamaTimeoutMs: c.model.ollamaTimeoutMs,
+      // The independent judge's identity. `judgeModel` is empty when no
+      // judge client is configured — i.e. the producer's own client is
+      // the judge, which is same-family by construction.
+      judgeModel: c.model.judgeModel,
+      judgeApiHost: c.model.judgeApiHost,
+      judgeOllamaModel: c.model.judgeOllamaModel,
+      judgeApiKeySet: Boolean(c.model.judgeApiKey),
+      judgeApiKeyLength: c.model.judgeApiKey ? c.model.judgeApiKey.length : 0,
     },
     rlPipeline: {
       path: c.rlPipeline.path,
@@ -437,6 +513,7 @@ config.snapshot = function snapshot() {
       filterRule: c.trainer.filterRule,
       filterMinGap: c.trainer.filterMinGap,
       filterAllowedTaskTypes: c.trainer.filterAllowedTaskTypes,
+      filterRequireIndependentJudge: c.trainer.filterRequireIndependentJudge,
       azrCorpusPath: c.trainer.azrCorpusPath,
       modalTokenId: redact('modalTokenId', c.trainer.modalTokenId),
       modalTokenSecret: redact('modalTokenSecret', c.trainer.modalTokenSecret),
@@ -444,6 +521,38 @@ config.snapshot = function snapshot() {
     warnings: c.warnings(),
   };
 };
+
+// --- judge independence helpers ---------------------------------------
+
+/**
+ * Normalise a model id for the family comparison. The same family can be
+ * spelled differently across providers (`MiniMax-M3.1-Flash` vs
+ * `minimax-M3.1-flash`), so the comparison is case-insensitive and
+ * ignores separators.
+ *
+ * @param {*} model
+ * @returns {string} the normalised id, or '' when there is no model id
+ */
+function normaliseModelId(model) {
+  if (typeof model !== 'string') return '';
+  return model.toLowerCase().replace(/[^a-z0-9]+/g, '');
+}
+
+/**
+ * True when `model` names the AWARE-tuned LoRA artefact — the merged
+ * Qwen3.5-9B build the preference pairs train. Such a model cannot judge
+ * those pairs independently.
+ *
+ * @param {*} model
+ * @returns {boolean}
+ */
+function isAwareTrainedOllamaModel(model) {
+  const id = normaliseModelId(model);
+  if (!id) return false;
+  // `aware-qwen35-9b`, `aware-qwen35-9b:latest`, `aware-qwen35-9b-q4_k_m`
+  // all name the same artefact. A non-AWARE prefix is a different model.
+  return id.startsWith('awareqwen359b');
+}
 
 module.exports = config;
 module.exports.default = config;

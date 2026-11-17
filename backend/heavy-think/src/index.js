@@ -8,6 +8,8 @@ import { refine } from './refine.js';
 import { scoreWithPRM } from './prm.js';
 import { verify } from './verify.js';
 import { writePreferencePair, shouldSkipDuplicate } from './preference-pair.js';
+import { describeJudge } from './judge-role.js';
+import { resolveJudgeClient, JUDGE_UNAVAILABLE_CODE } from './judge-client.js';
 import { defaultKForTaskType, K_CONFIGS } from './config.js';
 
 /**
@@ -21,6 +23,12 @@ import { defaultKForTaskType, K_CONFIGS } from './config.js';
  * @param {Object} [options.verification] - { method: 'exec'|'test_suite'|'citation_check'|'kg_consistency', ...args }
  * @param {Object} [options.prm] - PRM judge config (model override, custom prompt)
  * @param {Object} [options.client] - LLM client (for test injection). Must implement { generate(prompt, opts) }
+ * @param {Object} [options.judgeClient] - INDEPENDENT judge client. When present every judge
+ *   call (PRM scoring, refined-trace PRM scoring, the llm-judge verification) is served by
+ *   it and NEVER by options.client. When absent the producer's client is the judge (legacy
+ *   behaviour) and the pair record records that fact, so a same-family judge is never
+ *   mistaken for an independent one. A configured judge client that is UNAVAILABLE fails
+ *   closed — it never falls back to the candidate's model.
  * @param {string} [options.preferencePairPath] - JSONL output path; if omitted, no pair is written
  * @param {Object} [options.cache] - Optional PRM score cache (AWARE 2.0 Phase 2.2).
  *   Must implement { buildCacheKey, getCachedScore, putCachedScore }.
@@ -50,6 +58,13 @@ export async function heavy_think(options) {
   const verification = options.verification || null;
   const prmConfig = options.prm || {};
   const client = options.client;  // injected for tests; production: build default minimax client
+  // The INDEPENDENT judge client (kanban t_89720a07). options.judgeClient
+  // is the separate judge client; when it is absent the producer's client
+  // is the judge (legacy behaviour) and the pair record records that fact,
+  // so the pair is never mistaken for an independently judged one.
+  const judgeClient = options.judgeClient || null;
+  // WHICH client serves the judge, and WHICH model it uses.
+  const judgeRoute = resolveJudgeClient({ client, judgeClient });
   const pairPath = options.preferencePairPath || null;
   const cache = options.cache || null;  // Phase 2.2 — optional PRM score cache
   // MR-HIGH-002 fix: forward system_prompt through the heavy_think pipeline
@@ -75,10 +90,11 @@ export async function heavy_think(options) {
   const scored = await Promise.all(
     parallelResult.attempts.map(async (attempt) => {
       let score;
+      try {
       if (cache) {
         const key = cache.buildCacheKey({
           problem, reasoning: attempt.reasoning, task_type, context,
-          prm_model: client?.model || 'minimax-M3',
+          prm_model: judgeRoute.model || 'minimax-M3',
         });
         const hit = await cache.getCachedScore(key);
         if (hit) {
@@ -87,7 +103,7 @@ export async function heavy_think(options) {
         } else {
           cacheStats.misses++;
           score = await scoreWithPRM({
-            problem, reasoning: attempt.reasoning, task_type, context, prmConfig, client,
+            problem, reasoning: attempt.reasoning, task_type, context, prmConfig, client, judgeClient,
           });
           // Fire-and-forget cache write — must not block the scoring path.
           // Cache errors are silently swallowed inside putCachedScore.
@@ -95,8 +111,23 @@ export async function heavy_think(options) {
         }
       } else {
         score = await scoreWithPRM({
-          problem, reasoning: attempt.reasoning, task_type, context, prmConfig, client,
+          problem, reasoning: attempt.reasoning, task_type, context, prmConfig, client, judgeClient,
         });
+      }
+      } catch (err) {
+        // A CONFIGURED but unavailable judge fails CLOSED (kanban
+        // t_89720a07): the score is lost rather than taken from the
+        // candidate's client. The attempt keeps a null score so the pair
+        // records the loss instead of silently scoring the candidate
+        // with itself.
+        if (!err || err.code !== JUDGE_UNAVAILABLE_CODE) throw err;
+        score = {
+          score: null,
+          cost_usd: 0,
+          judge_source: 'judge_unavailable',
+          judge_model: judgeRoute.model,
+          raw: '',
+        };
       }
       return { ...attempt, prm_score: score.score, prm_meta: score };
     })
@@ -132,7 +163,7 @@ export async function heavy_think(options) {
     if (cache) {
       const key = cache.buildCacheKey({
         problem, reasoning: refinement.refined_trace, task_type, context,
-        prm_model: client?.model || 'minimax-M3',
+        prm_model: judgeRoute.model || 'minimax-M3',
       });
       const hit = await cache.getCachedScore(key);
       if (hit) {
@@ -141,13 +172,13 @@ export async function heavy_think(options) {
       } else {
         cacheStats.misses++;
         refinedJudge = await scoreWithPRM({
-          problem, reasoning: refinement.refined_trace, task_type, context, prmConfig, client,
+          problem, reasoning: refinement.refined_trace, task_type, context, prmConfig, client, judgeClient,
         });
         cache.putCachedScore(key, refinedJudge).catch(() => { /* ignore */ });
       }
     } else {
       refinedJudge = await scoreWithPRM({
-        problem, reasoning: refinement.refined_trace, task_type, context, prmConfig, client,
+        problem, reasoning: refinement.refined_trace, task_type, context, prmConfig, client, judgeClient,
       });
     }
   } catch (err) {
@@ -163,11 +194,28 @@ export async function heavy_think(options) {
     // the judge the task the trace was produced for — without it the judge can
     // only assess internal consistency, not correctness against the task.
     verificationResult = await verify({
-      trace: refinement.refined_trace, verification, context, client, problem,
+      trace: refinement.refined_trace, verification, context, client, judgeClient, problem,
     });
   }
 
   // 6. WRITE PREFERENCE PAIR (only if not duplicate)
+  //
+  // Judge identity + role (kanban t_155a95a1). The pair must say WHO judged
+  // it and WHAT ROLE that verdict plays before anything downstream is allowed
+  // to gate on it (04-ai-product-evaluation.md:35-36, :187-190). The role is
+  // 'diagnostic' unless the judge is an independent model family AND the
+  // caller declared a gating role.
+  // The model id the judge call actually used. With no judge client the
+  // judge IS the producer, so the serving model is the producer's — which
+  // is what makes the pair same-family by construction.
+  const judgeModel = judgeClient
+    ? (prmConfig.model || judgeRoute.model || null)
+    : (judgeRoute.model || null);
+  const judge = describeJudge({
+    candidateModel: client?.model || null,
+    judgeModel,
+    role: prmConfig.role || null,
+  });
   let pair_written = false;
   if (pairPath) {
     const contentHash = hashAttempt(problem, bestInitial.reasoning, refinement.refined_trace);
@@ -179,6 +227,17 @@ export async function heavy_think(options) {
           ts: new Date().toISOString(),
           problem,
           task_type,
+          // Judge role + independence (kanban t_155a95a1). The verdict's
+          // ROLE is declared on the record so nothing downstream can gate
+          // on a score whose role was never named. See src/judge-role.js.
+          prm_score_role: judge.prm_score_role,
+          prm_score_independent: judge.prm_score_independent,
+          prm_score_judge_model: judge.prm_score_judge_model,
+          // WHICH client served the judge (kanban t_89720a07): 'judge' when
+          // an independent judge client served the score,
+          // 'producer_fallback' when the producer's own client did — i.e.
+          // the verdict is same-family by construction.
+          prm_score_judge_client_source: judgeRoute.source,
           chosen: {
             reasoning: refinement.refined_trace,
             // Judge-sourced — the SAME instrument as `rejected.prm_score`.
@@ -188,11 +247,15 @@ export async function heavy_think(options) {
             // legacy length heuristic). NOT a PRM score — never compare it
             // against a judge score.
             refinement_confidence: refinement.refinement_confidence,
+            ...judge,
           },
           rejected: {
             reasoning: bestInitial.reasoning,
             prm_score: bestInitial.prm_score,
-            prm_score_source: 'prm_judge',
+            // 'unavailable' when the judge call failed outright (a missing
+            // score is honest; a fake score corrupts the training set).
+            prm_score_source: bestInitial.prm_score === null ? 'unavailable' : 'prm_judge',
+            ...judge,
           },
           all_attempts: attemptsWithSelection.map(a => ({
             reasoning: a.reasoning,

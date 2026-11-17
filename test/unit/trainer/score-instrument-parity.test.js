@@ -46,6 +46,24 @@ function makeJudgePairRecord() {
   };
 }
 
+// Judge declaration (kanban t_155a95a1). This suite is about INSTRUMENT
+// PARITY, not about the judge's role -- but the gap magnitude is only a gate
+// for an independent judge with a gating role, so the fixtures declare one.
+// The parity checks themselves run for every judge.
+function declareGateJudge(rec, judgeModel = "judge-model-x") {
+  const decl = {
+    prm_score_role: "launch_gate",
+    prm_score_independent: true,
+    prm_score_judge_model: judgeModel,
+  };
+  rec.prm_score_role = decl.prm_score_role;
+  rec.prm_score_independent = decl.prm_score_independent;
+  rec.prm_score_judge_model = decl.prm_score_judge_model;
+  rec.chosen = { ...rec.chosen, ...decl, prm_score_source: rec.chosen?.prm_score_source || 'prm_judge' };
+  rec.rejected = { ...rec.rejected, ...decl, prm_score_source: rec.rejected?.prm_score_source || 'prm_judge' };
+  return rec;
+}
+
 // -- outcome-filter: the gate ---------------------------------------------
 
 test('outcome-filter: a better-refined pair is NOT dropped as inverted (judge-sourced on both sides)', () => {
@@ -53,7 +71,7 @@ test('outcome-filter: a better-refined pair is NOT dropped as inverted (judge-so
   // from the PRM judge. The gap is positive (0.1), so the pair must NOT be
   // reported as inverted. It falls below the 0.20 minGap default, so it is
   // dropped as below-threshold — a different reason, and the correct one.
-  const result = filterOutcomePairs([makeJudgePairRecord()], { rule: 'min_score_gap' });
+  const result = filterOutcomePairs([declareGateJudge(makeJudgePairRecord())], { rule: 'min_score_gap' });
   assert.equal(result.dropped.length, 1);
   assert.doesNotMatch(
     result.dropped[0].reason,
@@ -65,7 +83,7 @@ test('outcome-filter: a better-refined pair is NOT dropped as inverted (judge-so
 
 test('outcome-filter: the refined side being better by the judge keeps the pair (minGap 0.20)', () => {
   // chosen 0.95 vs rejected 0.70 -> gap 0.25, above the 0.20 default.
-  const rec = makeJudgePairRecord();
+  const rec = declareGateJudge(makeJudgePairRecord());
   rec.chosen.prm_score = 0.95;
   rec.rejected.prm_score = 0.70;
   const result = filterOutcomePairs([rec], { rule: 'min_score_gap' });
@@ -89,7 +107,7 @@ test('outcome-filter: a legacy heuristic-vs-judge pair is dropped as mixed instr
 });
 
 test('outcome-filter: an explicitly surrogate-sourced chosen side is dropped as mixed instruments', () => {
-  const rec = makeJudgePairRecord();
+  const rec = declareGateJudge(makeJudgePairRecord());
   rec.chosen.prm_score_source = 'length_heuristic';
   const result = filterOutcomePairs([rec], { rule: 'min_score_gap' });
   assert.equal(result.kept.length, 0);
@@ -101,7 +119,7 @@ test('outcome-filter: two untagged legacy sides on the SAME heuristic bucket are
   // like this are genuine same-instrument comparisons and must keep the
   // existing behaviour (gap 0.15 < minGap 0.20 -> dropped as below-threshold,
   // NOT as mixed instruments).
-  const rec = makeLegacyHeuristicRecord();
+  const rec = declareGateJudge(makeLegacyHeuristicRecord());
   rec.rejected.prm_score = 0.6;
   const result = filterOutcomePairs([rec], { rule: 'min_score_gap' });
   assert.equal(result.kept.length, 0);
@@ -109,7 +127,7 @@ test('outcome-filter: two untagged legacy sides on the SAME heuristic bucket are
 });
 
 test('outcome-filter: two untagged legacy sides with a positive gap above minGap are kept', () => {
-  const rec = makeLegacyHeuristicRecord();
+  const rec = declareGateJudge(makeLegacyHeuristicRecord());
   rec.chosen.prm_score = 0.6;
   rec.rejected.prm_score = 0.4;
   const result = filterOutcomePairs([rec], { rule: 'min_score_gap' });
@@ -126,7 +144,7 @@ test('dpo-dataset: a legacy heuristic-vs-judge pair is skipped, not packaged', (
 });
 
 test('dpo-dataset: a judge-scored better-refined pair IS packaged', () => {
-  const result = toDpoDataset([makeJudgePairRecord()], { format: 'messages' });
+  const result = toDpoDataset([declareGateJudge(makeJudgePairRecord())], { format: 'messages' });
   assert.equal(result.rows.length, 1);
   assert.equal(result.skipped.mixedInstrument, 0);
   assert.equal(result.skipped.lowGap, 0);

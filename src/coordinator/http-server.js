@@ -19,9 +19,10 @@
 
 import http from 'node:http';
 import { randomUUID, timingSafeEqual, createHash } from 'node:crypto';
-import { coordinate, buildDefaultRouter, COORDINATOR_VERSION, COORDINATOR_BUILD_PHASE } from './index.js';
+import { coordinate, buildDefaultRouter, buildDefaultJudgeClient, COORDINATOR_VERSION, COORDINATOR_BUILD_PHASE } from './index.js';
 import config from '../config/index.cjs';
 import rlmConfig from '../config/rlm.cjs';
+import { verifyDeployedJudgePath } from '../config/rl-pipeline-build.cjs';
 import { logConversationFireAndCodert } from '../db/logger.js';
 import { runMigrations } from '../db/index.js';
 import { checkBudget, getBudgetStatus, isEnabled as isBudgetEnabled } from '../budget/watchdog.js';
@@ -138,6 +139,35 @@ if (rlmConfig.validate() !== false) {
     // eslint-disable-next-line no-console
     console.warn(`[aware-coordinator] rlm config: ${warning}`);
   }
+}
+
+// ─── deployed judge-path integrity (AWARE card t_091892e3) ───────────────
+// The coordinator's rl-pipeline used to be cloned from an external git
+// server at a pinned tag, while the repo carried its own vendored copy.
+// Nothing compared the two, so the deployed image could run a verify.js
+// with no `llm-judge` while config/rlm.yaml named `llm-judge` as the
+// default verification method — the declared default was inert for the
+// entire life of the corpus (329,627 of 329,639 live pairs carry
+// verification.method == 'none').
+//
+// The image now ships the reviewed tree, and this check proves at BOOT
+// that the tree the coordinator is about to execute is byte-for-byte the
+// tree that was reviewed. A mismatch FAILS THE BOOT: a drifted judge path
+// must not run, because every preference pair it writes is training data.
+const judgePathCheck = verifyDeployedJudgePath();
+if (!judgePathCheck.ok) {
+  throw new Error(
+    `[aware-coordinator] the deployed rl-pipeline tree does not match the shipped manifest — ` +
+    `${judgePathCheck.problems.join('; ')}. ` +
+    `Tree: ${judgePathCheck.srcDir}. Manifest: ${judgePathCheck.manifestPath}. ` +
+    'Refusing to boot with a judge path that differs from the reviewed tree.'
+  );
+}
+if (judgePathCheck.source === 'manifest') {
+  // eslint-disable-next-line no-console
+  console.log(
+    `[aware-coordinator] judge-path integrity: ${judgePathCheck.checked} source file(s) verified against ${judgePathCheck.manifestPath}`
+  );
 }
 
 // Phase 2.1: run Postgres migrations on boot. Best-effort — if the DB is
@@ -313,6 +343,9 @@ function sendText(res, status, text) {
  * @param {number} [opts.port=8080]
  * @param {string} [opts.host='127.0.0.1']
  * @param {Object} [opts.router] — pre-built router (defaults to buildDefaultRouter())
+ * @param {Object} [opts.judgeClient] — pre-built INDEPENDENT judge client
+ *   (defaults to buildDefaultJudgeClient()). null = no judge configured, so
+ *   the producer's client is the judge and the pair record says so.
  * @param {Function} [opts.coordinateFn] — override the coordinate function (used in tests)
  * @param {boolean} [opts.disableLoraReloader=false] — skip wiring the
  *   lora-reloader on startup. Used by tests so the reloader's poll
@@ -325,6 +358,14 @@ export async function startServer(opts = {}) {
   // not || so the fallback doesn't kick in for the zero value.
   const port = opts.port ?? config.coordinator.port;
   const router = opts.router || (await buildDefaultRouter(opts.routerOpts || {}));
+  // The INDEPENDENT judge client (kanban t_89720a07). It is a DIRECT
+  // client, never a router: a router could fall back to the producer's
+  // backend, and a silent fallback to the candidate's family reintroduces
+  // the defect this card exists to remove. When it is null the producer's
+  // client is the judge, and the pair record records that fact.
+  const judgeClient = opts.judgeClient !== undefined
+    ? opts.judgeClient
+    : await buildDefaultJudgeClient(opts.judgeClientOpts || {});
   const coordinateFn = opts.coordinateFn || coordinate;
 
   const server = http.createServer(async (req, res) => {
@@ -392,7 +433,7 @@ export async function startServer(opts = {}) {
         return await handleBudgetStatus(req, res, requestId);
       }
       if (req.method === 'POST' && req.url === '/coordinate') {
-        return await handleCoordinate(req, res, router, coordinateFn, requestId);
+        return await handleCoordinate(req, res, router, coordinateFn, requestId, judgeClient);
       }
       // 2026-11-10 (scribe): the audit-chain write endpoint. The gateway
       // mounts the audit volume READ-ONLY, so it cannot write to the
@@ -731,7 +772,7 @@ async function handleAuditLog(req, res, requestId) {
   }
 }
 
-async function handleCoordinate(req, res, router, coordinateFn, requestId) {
+async function handleCoordinate(req, res, router, coordinateFn, requestId, judgeClient) {
   const startMs = Date.now();
   const log = (extra) => logConversationFireAndCodert({
     requestId,
@@ -840,6 +881,10 @@ async function handleCoordinate(req, res, router, coordinateFn, requestId) {
         // the 3-tier fallback (the provider → Ollama) for free, and tests
         // can still override `coordinateFn` to bypass the router.
         client: router,
+        // The INDEPENDENT judge client (kanban t_89720a07). Passed
+        // alongside the producer's router so every judge call is served
+        // by the judge, never by the candidate's own client.
+        judgeClient,
         // ADR (internal) pluginConfig passthrough. The coordinator validates
         // and uses this; we pass it through unchanged so the
         // validator is the single source of truth for the shape.

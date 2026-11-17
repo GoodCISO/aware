@@ -230,30 +230,121 @@ function deepClone(value) {
  * could drift. Falls back to the mirrored constant when the vendored copy is
  * not present (the published npm package does not ship backend/).
  */
-function resolveImplementedVerificationMethods() {
-  const candidates = [
-    path.resolve(__dirname, '..', '..', 'backend', 'heavy-think', 'src', 'verify.js'),
-  ];
-  for (const candidate of candidates) {
-    try {
-      if (!fs.existsSync(candidate)) continue;
-      // require() of an ES module works on Node >= 22.12; older runtimes and
-      // any load failure fall through to the mirrored list.
-      const mod = require(candidate);
-      const names = mod && mod.VERIFICATION_METHOD_NAMES;
-      if (Array.isArray(names) && names.length > 0) {
-        return Object.freeze([...names]);
-      }
-    } catch {
-      // fall through to the mirrored list
-    }
+function liveVerifyJsCandidates(env) {
+  const e = env || process.env;
+  const out = [];
+
+  // 1. The DEPLOYED tree: the directory of AWARE_RL_PIPELINE_PATH. In the
+  //    container that is /app/rl-pipeline/src — the copy whose method set
+  //    decides whether the configured defaultMethod can actually run.
+  const fromEnv = e.AWARE_RL_PIPELINE_PATH;
+  if (fromEnv && String(fromEnv).trim()) {
+    out.push({
+      path: path.join(path.dirname(path.resolve(String(fromEnv).trim())), 'verify.js'),
+      source: 'deployed',
+    });
   }
-  return MIRRORED_IMPLEMENTED_VERIFICATION_METHODS;
+
+  // 2. The dev layout's sibling checkout — what a developer runs against
+  //    when the env var is unset.
+  out.push({
+    path: path.resolve(__dirname, '..', '..', '..', 'rl-pipeline', 'src', 'verify.js'),
+    source: 'dev-layout',
+  });
+
+  // 3. The repo's vendored copy — what the test-suite and a source checkout
+  //    run against.
+  out.push({
+    path: path.resolve(__dirname, '..', '..', 'backend', 'heavy-think', 'src', 'verify.js'),
+    source: 'vendored',
+  });
+
+  return out;
+}
+
+/**
+ * Resolve the implemented verification methods from the rl-pipeline copy the
+ * coordinator ACTUALLY LOADS.
+ *
+ * The previous implementation checked the repo's vendored copy FIRST and
+ * fell back to a hard-coded mirror when it was absent. In the container the
+ * repo copy does not exist, so the guard silently checked the MIRROR — a
+ * list claiming `llm-judge` is implemented while the deployed verify.js had
+ * no `llm-judge` at all. The guard passed on exactly the build that broke.
+ *
+ * So the resolution is LIVE-first, and a live copy that cannot be
+ * introspected is a HARD FAILURE, not a fallback: a build that predates the
+ * VERIFICATION_METHOD_NAMES registry cannot be checked against the
+ * configured methods, and silently trusting a mirror is the defect this
+ * card exists to remove.
+ *
+ * The mirror remains the answer only when NO live copy exists at all (the
+ * published npm package does not ship backend/ or a sibling checkout).
+ */
+function resolveImplementedVerificationMethods(env) {
+  const candidates = liveVerifyJsCandidates(env);
+
+  // The FIRST candidate that EXISTS is the tree the coordinator actually
+  // runs, and it is DECISIVE. There is no "try the next one" — the next
+  // candidate is a different tree, and answering for it proves nothing
+  // about the one in production.
+  //
+  // This is the defect the card exists to remove: the previous loop
+  // `continue`d past a candidate it could not introspect and kept
+  // looking, so an un-introspectable DEPLOYED verify.js was answered by
+  // the repo's vendored copy. The guard then passed on exactly the build
+  // that could not service the configured defaultMethod.
+  const existing = candidates.filter((c) => fs.existsSync(c.path));
+  if (existing.length === 0) {
+    // No live copy at all: the published npm package does not ship
+    // backend/ and there is no sibling checkout. The mirror is the only
+    // answer available, and it is a declaration, not a measurement.
+    return MIRRORED_IMPLEMENTED_VERIFICATION_METHODS;
+  }
+
+  const candidate = existing[0];
+  let mod;
+  try {
+    // require() of an ES module works on Node >= 22.12; older runtimes and
+    // any load failure mean the registry is unavailable.
+    mod = require(candidate.path);
+  } catch (err) {
+    throw new Error(
+      `Config: the rl-pipeline copy that implements the verification methods could not be introspected — ` +
+      `${candidate.path} (${candidate.source}) — it could not be loaded (${err.message}). ` +
+      'A build whose verify.js cannot be loaded cannot be checked against the ' +
+      'configured verification methods, so the configured defaultMethod/allowedMethods cannot be proven serviceable. ' +
+      'Rebuild the coordinator image from a tree whose rl-pipeline ships the registry.'
+    );
+  }
+
+  const names = mod && mod.VERIFICATION_METHOD_NAMES;
+  if (!Array.isArray(names) || names.length === 0) {
+    throw new Error(
+      `Config: the rl-pipeline copy that implements the verification methods could not be introspected — ` +
+      `${candidate.path} (${candidate.source}) — it does not export VERIFICATION_METHOD_NAMES. ` +
+      'A build whose verify.js predates the VERIFICATION_METHOD_NAMES registry cannot be checked against the ' +
+      'configured verification methods, so the configured defaultMethod/allowedMethods cannot be proven serviceable. ' +
+      'Rebuild the coordinator image from a tree whose rl-pipeline ships the registry.'
+    );
+  }
+
+  return Object.freeze([...names]);
 }
 
 let implementedMethods = null;
 
-function getImplementedVerificationMethods() {
+/**
+ * The implemented verification methods.
+ *
+ * Pass { env } to resolve against a specific environment (the loader does
+ * this so a test can point the resolution at a fixture tree). Without it
+ * the answer is cached for the process lifetime.
+ */
+function getImplementedVerificationMethods(opts = {}) {
+  if (opts && opts.env) {
+    return resolveImplementedVerificationMethods(opts.env);
+  }
   if (!implementedMethods) implementedMethods = resolveImplementedVerificationMethods();
   return implementedMethods;
 }
@@ -321,7 +412,10 @@ function loadRlmConfig(opts = {}) {
   // catch the cases the guard cannot see (e.g. a method that IS implemented
   // but is not policy-legal, such as 'test_suite').
   if (opts.guard !== false) {
-    assertVerificationMethodsImplementable(withOverrides, getImplementedVerificationMethods());
+    // Resolve against the SAME env the loader applied overrides with, so a
+    // deployment's AWARE_RL_PIPELINE_PATH points the guard at the copy the
+    // coordinator will actually load.
+    assertVerificationMethodsImplementable(withOverrides, getImplementedVerificationMethods({ env }));
     assertDefaultMethodAllowed(withOverrides);
   }
 
@@ -466,3 +560,6 @@ module.exports.getImplementedVerificationMethods = getImplementedVerificationMet
 module.exports.IMPLEMENTED_VERIFICATION_METHODS = getImplementedVerificationMethods();
 module.exports.MIRRORED_IMPLEMENTED_VERIFICATION_METHODS = MIRRORED_IMPLEMENTED_VERIFICATION_METHODS;
 module.exports.assertVerificationMethodsImplementable = assertVerificationMethodsImplementable;
+module.exports.__probe = true;
+module.exports.resolveImplementedVerificationMethods = resolveImplementedVerificationMethods;
+module.exports.liveVerifyJsCandidates = liveVerifyJsCandidates;

@@ -180,8 +180,16 @@ test('judge-family: the vendored producer copy matches upstream byte for byte', 
     t.skip('the upstream heavy-think checkout is not present on this machine');
     return;
   }
-  const refs = ['fix/judge-family-t_2a91cc4b', 'main', 'HEAD'];
+  // `main` is tried FIRST: it is the ref upstream DEPLOYS, so it is the one
+  // the vendored copy must match. The feature branches are fallbacks for a
+  // tree whose `main` does not yet carry the file.
+  //
+  // This ordering matters: preferring a feature branch made this check
+  // compare the vendored copy against a STALE ref, so a vendored copy that
+  // had drifted from upstream `main` still passed (t_2ca310b8).
+  const refs = ['main', 'fix/judge-family-namespace-t_2ca310b8', 'fix/judge-family-t_2a91cc4b', 'HEAD'];
   let upstream = null;
+  let usedRef = null;
   for (const ref of refs) {
     try {
       upstream = execFileSync(
@@ -189,6 +197,7 @@ test('judge-family: the vendored producer copy matches upstream byte for byte', 
         ['-C', upstreamRepo, 'show', `${ref}:src/judge-family.js`],
         { encoding: 'utf8' }
       );
+      usedRef = ref;
       break;
     } catch {
       // try the next ref
@@ -201,6 +210,6 @@ test('judge-family: the vendored producer copy matches upstream byte for byte', 
   assert.equal(
     upstream,
     fs.readFileSync(PRODUCER_FAMILY_MODULE, 'utf8'),
-    'the vendored judge-family.js has drifted from upstream'
+    `the vendored judge-family.js has drifted from upstream ${usedRef}`
   );
 });

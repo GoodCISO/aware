@@ -71,6 +71,103 @@ test('config: validate() ACCEPTS a judge model from a different family', () => {
   assert.doesNotThrow(() => config.validate());
 });
 
+// -- PROVIDER-PREFIXED ids (t_2ca310b8) -------------------------------------
+
+test('config: validate() REFUSES a provider-prefixed judge of the same family', () => {
+  // The family map did not resolve a provider-prefixed id on its MODEL
+  // SEGMENT, so `meta-llama/llama-3.3-70b` and `llama-3.3-70b` resolved to
+  // DIFFERENT families and the prefixed judge was ACCEPTED — declared
+  // independent of its own unprefixed twin, and allowed to gate.
+  process.env.AWARE_PROVIDER_MODEL = 'meta-llama/llama-3.3-70b';
+  process.env.AWARE_JUDGE_MODEL = 'llama-3.3-70b';
+  const config = require('../../../src/config/index.cjs');
+  assert.throws(
+    () => config.validate(),
+    /AWARE_JUDGE_MODEL \(llama-3\.3-70b\) must be a different model family from AWARE_PROVIDER_MODEL \(meta-llama\/llama-3\.3-70b\)/,
+  );
+});
+
+test('config: validate() REFUSES a provider-prefixed judge of the same family, in the other order', () => {
+  // The refusal must not depend on which side carries the namespace.
+  process.env.AWARE_PROVIDER_MODEL = 'llama-3.3-70b';
+  process.env.AWARE_JUDGE_MODEL = 'meta-llama/llama-3.3-70b';
+  const config = require('../../../src/config/index.cjs');
+  assert.throws(
+    () => config.validate(),
+    /must be a different model family from AWARE_PROVIDER_MODEL/,
+  );
+});
+
+test('config: validate() REFUSES a provider-prefixed judge of the same family (second spelling)', () => {
+  process.env.AWARE_PROVIDER_MODEL = 'x-ai/grok-4';
+  process.env.AWARE_JUDGE_MODEL = 'grok-4';
+  const config = require('../../../src/config/index.cjs');
+  assert.throws(
+    () => config.validate(),
+    /must be a different model family from AWARE_PROVIDER_MODEL/,
+  );
+});
+
+test('config: validate() ACCEPTS a provider-prefixed judge from a DIFFERENT family', () => {
+  // The fix must not over-refuse: a genuinely different family is still
+  // independent, however it is spelled.
+  process.env.AWARE_PROVIDER_MODEL = 'meta-llama/llama-3.3-70b';
+  process.env.AWARE_JUDGE_MODEL = 'claude-opus-4';
+  const config = require('../../../src/config/index.cjs');
+  assert.doesNotThrow(() => config.validate());
+});
+
+test('config: validate() ACCEPTS `google/gemma-2-9b` as a judge of `gemini-3-pro`', () => {
+  // The `^google` rule used to map every Google model to the GEMINI family,
+  // so a Gemma judge was REFUSED against a Gemini candidate. Gemma is a
+  // DIFFERENT family, so this must now be ACCEPTED — and the verdict must
+  // not depend on argument order.
+  //
+  // NOTE ON THE CARD'S AC-4: `t_2ca310b8` asked for this case to be
+  // REFUSED while `AWARE_PROVIDER_MODEL=gemma-2-9b,
+  // AWARE_JUDGE_MODEL=gemini-3-pro` was ACCEPTED. Those two are mutually
+  // inconsistent: the same-family comparison is symmetric, so the same pair
+  // cannot be refused in one order and accepted in the other. AC-4 as
+  // written encodes the PRE-FIX asymmetry the card names as the defect
+  // ("the same gemma/gemini pair is accepted in one order and refused in the
+  // other... Both verdicts are wrong"), and it contradicts the card's own
+  // AC-3 (`sameModelFamily('gemma-2-9b','gemini-3-pro')` is `false`, i.e.
+  // DIFFERENT families, i.e. independent, i.e. accepted). This card
+  // implements the SYMMETRIC reading, which is the one AC-3 and the
+  // reviewer's "both verdicts are wrong" statement require.
+  process.env.AWARE_PROVIDER_MODEL = 'gemini-3-pro';
+  process.env.AWARE_JUDGE_MODEL = 'google/gemma-2-9b';
+  const config = require('../../../src/config/index.cjs');
+  assert.doesNotThrow(() => config.validate(),
+    'gemma and gemini are different families');
+});
+
+test('config: validate() ACCEPTS `gemini-3-pro` as a judge of `gemma-2-9b`', () => {
+  // The other order — the pair's verdict must be symmetric.
+  process.env.AWARE_PROVIDER_MODEL = 'gemma-2-9b';
+  process.env.AWARE_JUDGE_MODEL = 'gemini-3-pro';
+  const config = require('../../../src/config/index.cjs');
+  assert.doesNotThrow(() => config.validate());
+});
+
+test('config: validate() REFUSES a Gemma judge of a Gemma candidate, in BOTH spellings', () => {
+  // The same-family refusal still applies across spellings: `google/gemma-2-9b`
+  // is the gemma family, so it is NOT independent of `gemma-2-9b`.
+  for (const [candidate, judge] of [
+    ['gemma-2-9b', 'google/gemma-2-9b'],
+    ['google/gemma-2-9b', 'gemma-2-9b'],
+  ]) {
+    process.env.AWARE_PROVIDER_MODEL = candidate;
+    process.env.AWARE_JUDGE_MODEL = judge;
+    const config = require('../../../src/config/index.cjs');
+    assert.throws(
+      () => config.validate(),
+      /must be a different model family from AWARE_PROVIDER_MODEL/,
+      `${judge} must be refused against ${candidate}`
+    );
+  }
+});
+
 test('config: validate() REFUSES an Ollama judge pointing at the AWARE-trained LoRA artefact', () => {
   process.env.AWARE_JUDGE_OLLAMA_MODEL = 'aware-qwen35-9b:latest';
   const config = require('../../../src/config/index.cjs');

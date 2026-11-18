@@ -79,6 +79,43 @@ export function resolveJudgeClient({ client = null, judgeClient = null } = {}) {
 }
 
 /**
+ * The model that will ACTUALLY serve a judge call.
+ *
+ * `options.prm.model` is the documented per-call judge model override. It
+ * travels into the generate options (`src/prm.js`: `genOpts.model =
+ * prmConfig.model`) and every AWARE client honours `opts.model` over its own
+ * default — so the override really does decide which model serves the score.
+ *
+ * This is the ONE place the effective judge model is resolved, so the score
+ * (`src/prm.js`) and the pair record's judge tags (`src/index.js`) cannot
+ * disagree about which model produced the verdict (kanban t_dc053dc2).
+ *
+ * Before this helper the two sides resolved it DIFFERENTLY: `prm.js` always
+ * preferred the override, while `index.js` preferred it only when a
+ * `judgeClient` was configured. In the no-`judgeClient` branch — AWARE's
+ * production default — the override changed the serving model while the
+ * record named the producer's model, so `prm_score_judge_model` was a false
+ * statement and the independence verdict was computed against the wrong
+ * model.
+ *
+ * @param {Object} [opts]
+ * @param {Object} [opts.prmConfig] — the per-call PRM config (`options.prm`).
+ * @param {Object} [opts.judgeRoute] — the resolved judge route (see
+ *        `resolveJudgeClient`), whose `model` is the serving client's model.
+ * @returns {string|null} the effective judge model id, or null when unknown.
+ */
+export function resolveEffectiveJudgeModel({ prmConfig = null, judgeRoute = null } = {}) {
+  const override = prmConfig && typeof prmConfig.model === 'string'
+    ? prmConfig.model.trim()
+    : '';
+  if (override) return override;
+  const routeModel = judgeRoute && typeof judgeRoute.model === 'string'
+    ? judgeRoute.model.trim()
+    : '';
+  return routeModel || null;
+}
+
+/**
  * Run a judge call, failing CLOSED when an independent judge client is
  * configured but unavailable.
  *

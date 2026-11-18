@@ -9,7 +9,7 @@ import { scoreWithPRM } from './prm.js';
 import { verify } from './verify.js';
 import { writePreferencePair, shouldSkipDuplicate } from './preference-pair.js';
 import { describeJudge } from './judge-role.js';
-import { resolveJudgeClient, JUDGE_UNAVAILABLE_CODE } from './judge-client.js';
+import { resolveJudgeClient, resolveEffectiveJudgeModel, JUDGE_UNAVAILABLE_CODE } from './judge-client.js';
 import { defaultKForTaskType, K_CONFIGS } from './config.js';
 
 /**
@@ -65,6 +65,21 @@ export async function heavy_think(options) {
   const judgeClient = options.judgeClient || null;
   // WHICH client serves the judge, and WHICH model it uses.
   const judgeRoute = resolveJudgeClient({ client, judgeClient });
+  // The model that ACTUALLY serves every judge call in this heavy_think
+  // call: `prmConfig.model || judgeRoute.model`. The per-call override
+  // travels into the generate options and every client honours `opts.model`
+  // over its own default, so the override decides which model produces the
+  // score. Resolved ONCE, here, so the cache key, the score's own
+  // `judge_model` and the pair record's judge tags cannot disagree about
+  // which model produced the verdict (kanban t_dc053dc2).
+  //
+  // The cache key MUST use this model too: a key built from the serving
+  // client's default while the score is produced by the override would
+  // serve a score produced by one model under a record that names another.
+  const effectiveJudgeModel = resolveEffectiveJudgeModel({
+    prmConfig,
+    judgeRoute,
+  });
   const pairPath = options.preferencePairPath || null;
   const cache = options.cache || null;  // Phase 2.2 — optional PRM score cache
   // MR-HIGH-002 fix: forward system_prompt through the heavy_think pipeline
@@ -94,7 +109,7 @@ export async function heavy_think(options) {
       if (cache) {
         const key = cache.buildCacheKey({
           problem, reasoning: attempt.reasoning, task_type, context,
-          prm_model: judgeRoute.model || 'minimax-M3',
+          prm_model: effectiveJudgeModel || 'minimax-M3',
         });
         const hit = await cache.getCachedScore(key);
         if (hit) {
@@ -125,7 +140,7 @@ export async function heavy_think(options) {
           score: null,
           cost_usd: 0,
           judge_source: 'judge_unavailable',
-          judge_model: judgeRoute.model,
+          judge_model: effectiveJudgeModel,
           raw: '',
         };
       }
@@ -163,7 +178,7 @@ export async function heavy_think(options) {
     if (cache) {
       const key = cache.buildCacheKey({
         problem, reasoning: refinement.refined_trace, task_type, context,
-        prm_model: judgeRoute.model || 'minimax-M3',
+        prm_model: effectiveJudgeModel || 'minimax-M3',
       });
       const hit = await cache.getCachedScore(key);
       if (hit) {
@@ -205,15 +220,55 @@ export async function heavy_think(options) {
   // to gate on it (04-ai-product-evaluation.md:35-36, :187-190). The role is
   // 'diagnostic' unless the judge is an independent model family AND the
   // caller declared a gating role.
-  // The model id the judge call actually used. With no judge client the
-  // judge IS the producer, so the serving model is the producer's — which
-  // is what makes the pair same-family by construction.
-  const judgeModel = judgeClient
-    ? (prmConfig.model || judgeRoute.model || null)
-    : (judgeRoute.model || null);
+  //
+  // THE EFFECTIVE JUDGE MODEL (kanban t_dc053dc2). The model that served the
+  // score is `prmConfig.model || judgeRoute.model`: the per-call override
+  // travels into the generate options and every client honours `opts.model`
+  // over its own default, so the override really does decide which model
+  // produced the verdict. The judge tags must therefore be computed from
+  // THAT model — not from the serving client's default.
+  //
+  // Before this, the override was honoured only when a `judgeClient` was
+  // configured. In the no-`judgeClient` branch — AWARE's production default,
+  // since a judge client is built only when AWARE_JUDGE_MODEL is set — the
+  // override changed the serving model while the record named the
+  // producer's model. Two consequences, both on the fields the trainer
+  // trusts (`mayJudgeGate()` in AWARE's src/trainer/judge-role.js):
+  //   * `prm_score_judge_model` was a FALSE statement about which model
+  //     produced the score; and
+  //   * the independence verdict was computed against the WRONG model, so a
+  //     genuinely independent override (`qwen3-32b`) was not recognised as
+  //     independent and the override was silently useless for its purpose.
+  //
+  // The effective model is resolved through the ONE shared helper
+  // (`resolveEffectiveJudgeModel`), the same one the score's own
+  // `judge_model` uses, so the record can never name a model that did not
+  // serve the score.
+  //
+  // FAIL CLOSED ON A SAME-FAMILY JUDGE. `describeJudge()` compares model
+  // FAMILIES (kanban t_2a91cc4b), so a same-family effective judge — the
+  // identical model, a cheaper sibling such as `MiniMax-M3` next to
+  // `MiniMax-M3.1-Flash`, or the AWARE-trained LoRA artefact — is
+  // demoted to 'diagnostic' with `prm_score_independent=false`, whatever
+  // role the caller requested. A per-call override must not be able to
+  // RAISE a judge's authority above what the family rule allows.
+  //
+  // THE CHOICE (AC4 of t_dc053dc2): DEMOTE THE VERDICT, DO NOT REFUSE THE
+  // CALL. The override is honoured for SCORING — an operator may
+  // legitimately want a cheaper judge — and only the verdict's AUTHORITY is
+  // demoted. 04-ai-product-evaluation.md:240-243 is about the verdict's
+  // authority ("Same family -> the verdict is a DIAGNOSTIC, never a launch
+  // gate ... Run it again with an independent judge before it gates
+  // anything"), not about whether the verdict may be computed; refusing the
+  // call would discard a score the operator asked for without making the
+  // verdict any safer.
+  //
+  // `effectiveJudgeModel` is resolved once, near the top of this function
+  // (see `resolveEffectiveJudgeModel` above), so the cache key, the score's
+  // own `judge_model` and these tags all name the same model.
   const judge = describeJudge({
     candidateModel: client?.model || null,
-    judgeModel,
+    judgeModel: effectiveJudgeModel,
     role: prmConfig.role || null,
   });
   let pair_written = false;

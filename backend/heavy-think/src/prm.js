@@ -6,7 +6,7 @@
 // K+1 times per heavy_think call (K parallel attempts + 1 for the refinement).
 // Per AWARE 2.0 ADR-020: cheap model, batch scoring, JSON output.
 
-import { resolveJudgeClient, callJudge } from './judge-client.js';
+import { resolveJudgeClient, callJudge, resolveEffectiveJudgeModel } from './judge-client.js';
 
 const DEFAULT_PRM_PROMPT = `You are a reasoning quality evaluator. Score the agent's reasoning on a scale of 1-10.
 
@@ -41,13 +41,20 @@ export async function scoreWithPRM({ problem, reasoning, task_type, context, prm
   // implemented. It travels in the generate options, which every AWARE
   // client honours (opts.model wins over the client's default).
   const judge = resolveJudgeClient({ client, judgeClient });
+  // The model that ACTUALLY serves this call. The per-call override wins,
+  // because it travels into the generate options below and every client
+  // honours `opts.model` over its own default. Resolved through the ONE
+  // shared helper so the pair record (`src/index.js`) cannot name a
+  // different model than the one that served the score (kanban
+  // t_dc053dc2).
+  const effectiveModel = resolveEffectiveJudgeModel({ prmConfig, judgeRoute: judge });
   const genOpts = { task_type, phase: 'prm_score' };
   if (prmConfig.model) {
     genOpts.model = prmConfig.model;
   }
   const result = await callJudge(
     () => judge.client.generate(prompt, genOpts),
-    { configured: judge.configured, model: judge.model || prmConfig.model || null },
+    { configured: judge.configured, model: effectiveModel },
   );
 
   const text = result.reasoning || result.text || '';
@@ -66,7 +73,7 @@ export async function scoreWithPRM({ problem, reasoning, task_type, context, prm
     // independent judge client served the call and 'producer_fallback'
     // when the producer's own client did.
     judge_source: judge.source,
-    judge_model: prmConfig.model || judge.model || null,
+    judge_model: effectiveModel,
     // Additive: retry metadata from the provider client. See
     // t_22a34f6d design §3.4.2.
     __retriedAttempts: result.__retriedAttempts || 0,

@@ -212,7 +212,12 @@ services:
       #
       # With no git remote to reach, the build needs no network entitlement
       # at all — the default bridge network is sufficient.
-    image: aware-coordinator:0.4.6-phase4-rl-pipeline-mcp-credential
+    # 2026-11-19 (t_3212eebd): bumped to 0.4.7-judge-family-deployed. The
+    # 0.4.6 image shipped the PRE-t_8b44fe9d judge-family resolver, so the
+    # config-time guard ran the MIRROR while the runtime guard ran the
+    # canonical module -- two independent implementations of the same rule
+    # in production. 0.4.7 resolves /app/rl-pipeline/src/judge-family.js.
+    image: aware-coordinator:0.4.7-judge-family-deployed
     container_name: aware-2-coordinator
     ports:
       - "18081:8080"
@@ -491,7 +496,9 @@ services:
     # copy (backend/heavy-think/src), COPYed into the image by the
     # Dockerfile — not cloned from an internal git server, not mounted from
     # the host. See the coordinator service above.
-    image: aware-coordinator:0.4.6-phase4-rl-pipeline-mcp-credential
+    # 2026-11-19 (t_3212eebd): bumped to 0.4.7-judge-family-deployed so the
+    # trainer ships the same judge-family resolver as the coordinator.
+    image: aware-coordinator:0.4.7-judge-family-deployed
     container_name: aware-2-trainer
     profiles: ["training"]
     command: ["node", "src/trainer/index.js"]

@@ -204,6 +204,155 @@ test('config: validate() ACCEPTS a non-AWARE Ollama judge model', () => {
   assert.doesNotThrow(() => config.validate());
 });
 
+// -- the OLLAMA judge path is subject to BOTH refusals (t_866475db) -------
+
+test('config: validate() REFUSES an Ollama judge in the candidate\'s own model family', () => {
+  // THE case this card exists for. The Ollama judge and the provider judge
+  // are the same kind of judge — a model that grades the candidate's
+  // traces — and they are named by two different env vars. Before
+  // t_866475db the family refusal applied to `AWARE_JUDGE_MODEL` ONLY, so
+  // this configuration was ACCEPTED at boot and the operator was told it
+  // was valid. The producer's runtime guard then demoted the pair to a
+  // diagnostic, so the misconfiguration surfaced in the DATA rather than
+  // at boot.
+  //
+  // Non-vacuous: against the pre-fix implementation this was ACCEPTED.
+  process.env.AWARE_PROVIDER_MODEL = 'qwen3-8b';
+  process.env.AWARE_JUDGE_OLLAMA_MODEL = 'qwen3-32b';
+  const config = require('../../../src/config/index.cjs');
+  assert.throws(
+    () => config.validate(),
+    /AWARE_JUDGE_OLLAMA_MODEL \(qwen3-32b\) must be a different model family from AWARE_PROVIDER_MODEL \(qwen3-8b\)/,
+  );
+});
+
+test('config: the Ollama same-family refusal names the OLLAMA variable, not the provider one', () => {
+  // The two judge paths must stay distinguishable in the message: the
+  // operator has to know WHICH setting to change.
+  process.env.AWARE_PROVIDER_MODEL = 'qwen3-8b';
+  process.env.AWARE_JUDGE_OLLAMA_MODEL = 'qwen3-32b';
+  const config = require('../../../src/config/index.cjs');
+  assert.throws(() => config.validate(), /AWARE_JUDGE_OLLAMA_MODEL/);
+  assert.throws(() => config.validate(), /must be a different model family from AWARE_PROVIDER_MODEL/);
+});
+
+test('config: validate() REFUSES a CHEAPER SIBLING on the Ollama judge path too', () => {
+  // The family comparison is on the FAMILY, not the id, on EVERY judge
+  // path — not just the provider one.
+  process.env.AWARE_PROVIDER_MODEL = 'MiniMax-M3.1-Flash';
+  process.env.AWARE_JUDGE_OLLAMA_MODEL = 'minimax-M3';
+  const config = require('../../../src/config/index.cjs');
+  assert.throws(
+    () => config.validate(),
+    /AWARE_JUDGE_OLLAMA_MODEL \(minimax-M3\) must be a different model family from AWARE_PROVIDER_MODEL \(MiniMax-M3\.1-Flash\)/,
+  );
+});
+
+test('config: validate() ACCEPTS an Ollama judge from a DIFFERENT family', () => {
+  // The fix must not be a blanket ban: the sibling precedent at
+  // `judge-independence.test.js:99-106` (a non-AWARE Ollama judge model
+  // accepted) must stay green, and a genuinely different family must
+  // still be accepted.
+  process.env.AWARE_PROVIDER_MODEL = 'MiniMax-M3.1-Flash';
+  process.env.AWARE_JUDGE_OLLAMA_MODEL = 'qwen2.5:7b';
+  const config = require('../../../src/config/index.cjs');
+  assert.doesNotThrow(() => config.validate());
+});
+
+test('config: the corpus-trained refusal keeps the OLLAMA path\'s specific reason', () => {
+  // The ordering must not regress: the corpus-trained artefact is refused
+  // with ITS OWN reason, not shadowed by the family refusal. The
+  // artefact's family group is `qwen`, so against a `qwen3-8b` candidate
+  // the family rule would ALSO refuse it — with the wrong reason.
+  process.env.AWARE_PROVIDER_MODEL = 'qwen3-8b';
+  process.env.AWARE_JUDGE_OLLAMA_MODEL = 'aware-qwen35-9b:latest';
+  const config = require('../../../src/config/index.cjs');
+  assert.throws(
+    () => config.validate(),
+    /AWARE_JUDGE_OLLAMA_MODEL \(aware-qwen35-9b:latest\) must not be the AWARE-trained LoRA artefact/,
+  );
+});
+
+test('config: BOTH judge paths refuse a same-family judge with their own variable name', () => {
+  // The refusal is a property of the JUDGE PATH, not of one env var: each
+  // path must name itself in the message.
+  for (const [envVar, judgeValue] of [
+    ['AWARE_JUDGE_MODEL', 'qwen3-32b'],
+    ['AWARE_JUDGE_OLLAMA_MODEL', 'qwen3-32b'],
+  ]) {
+    process.env.AWARE_PROVIDER_MODEL = 'qwen3-8b';
+    process.env.AWARE_JUDGE_MODEL = '';
+    process.env.AWARE_JUDGE_OLLAMA_MODEL = '';
+    process.env[envVar] = judgeValue;
+    const config = require('../../../src/config/index.cjs');
+    assert.throws(
+      () => config.validate(),
+      new RegExp(`${envVar} \\(qwen3-32b\\) must be a different model family`),
+      `${envVar} must refuse a same-family judge and name itself`,
+    );
+  }
+});
+
+// -- the STRUCTURAL property: one registry, one helper -------------------
+
+test('config: every judge path is listed in the judge-path registry', () => {
+  // The card's fourth acceptance criterion: the two judge paths share ONE
+  // implementation of the two refusals, so a THIRD judge path cannot
+  // arrive un-refused.
+  //
+  // The registry is the mechanism: `config.validate()` walks it, so adding
+  // a judge model means adding a registry entry, and the walk then applies
+  // both refusals to it. This assertion is what makes the registry
+  // non-vacuous — it fails if a judge path is added to the config without
+  // being added to the registry.
+  const config = require('../../../src/config/index.cjs');
+  const registry = config.JUDGE_MODEL_PATHS;
+  assert.ok(Array.isArray(registry), 'the judge-path registry is not exported');
+  const envVars = registry.map((p) => p.envVar);
+  assert.ok(
+    envVars.includes('AWARE_JUDGE_MODEL'),
+    'the provider judge path is missing from the registry',
+  );
+  assert.ok(
+    envVars.includes('AWARE_JUDGE_OLLAMA_MODEL'),
+    'the Ollama judge path is missing from the registry',
+  );
+});
+
+test('config: the registry covers EVERY judge model the config exposes', () => {
+  // The registry and the config object cannot drift: every judge model
+  // the config exposes must be checked by validate(). This is the
+  // sweep for a THIRD judge path — the thing the card's fourth
+  // acceptance criterion is about.
+  const config = require('../../../src/config/index.cjs');
+  const snapshot = config.snapshot();
+  const exposed = Object.keys(snapshot.model).filter((k) => /judge/i.test(k) && /model/i.test(k));
+  assert.ok(
+    exposed.length > 0,
+    'the scan found no judge model keys — the scan is broken, so this test proves nothing',
+  );
+  const registered = new Set(config.JUDGE_MODEL_PATHS.map((p) => p.key));
+  for (const key of exposed) {
+    assert.ok(
+      registered.has(key),
+      `config.model.${key} is a judge model that no judge path registers — it would be UN-REFUSED`,
+    );
+  }
+});
+
+test('config: the registry drives validate() — a registry entry IS enforced', () => {
+  // The registry is not decoration: an entry in it must actually be
+  // enforced by validate(). This proves the walk is live, so the
+  // structural guarantee above is not a promise about dead code.
+  const config = require('../../../src/config/index.cjs');
+  const entry = config.JUDGE_MODEL_PATHS.find((p) => p.envVar === 'AWARE_JUDGE_OLLAMA_MODEL');
+  assert.ok(entry, 'the Ollama judge path is not in the registry');
+
+  process.env.AWARE_PROVIDER_MODEL = 'qwen3-8b';
+  process.env.AWARE_JUDGE_OLLAMA_MODEL = 'qwen3-32b';
+  assert.throws(() => config.validate(), /AWARE_JUDGE_OLLAMA_MODEL/);
+});
+
 test('config: validate() passes when no judge is configured at all', () => {
   const config = require('../../../src/config/index.cjs');
   assert.doesNotThrow(() => config.validate());

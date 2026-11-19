@@ -41,6 +41,7 @@ const os = require('node:os');
 const {
   isIndependentJudge,
   isCorpusTrainedArtefact,
+  familyModuleResolution,
 } = require('./judge-family.cjs');
 
 // --- helpers ------------------------------------------------------------
@@ -455,6 +456,17 @@ config.warnings = function warnings() {
   if (!config.model.providerApiKey && config.model.mode !== 'offline') {
     // Not a hard fail (we have a stub client) but worth flagging.
     out.push('LLM_API_KEY is not set — primary tier will fail and fall through to Ollama');
+  }
+  // The judge-independence guard reads the model-family map. When the
+  // CANONICAL producer module exists but could not be LOADED, the guard is
+  // running the MIRRORED map instead — a second implementation, which is the
+  // exact condition t_2a91cc4b set out to remove. That must not be silent
+  // (t_8b44fe9d). The 'absent' case is NOT an anomaly: the published npm
+  // package ships src/config/ but not backend/, so the mirror is the only
+  // implementation there.
+  const familyResolution = familyModuleResolution();
+  if (familyResolution.reasonCode === 'load-failed' || familyResolution.reasonCode === 'invalid') {
+    out.push(`judge-family: ${familyResolution.reason}`);
   }
   return out;
 };

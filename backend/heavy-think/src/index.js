@@ -9,7 +9,7 @@ import { scoreWithPRM } from './prm.js';
 import { verify } from './verify.js';
 import { writePreferencePair, shouldSkipDuplicate } from './preference-pair.js';
 import { describeJudge } from './judge-role.js';
-import { resolveJudgeClient, resolveEffectiveJudgeModel, JUDGE_UNAVAILABLE_CODE } from './judge-client.js';
+import { resolveJudgeClient, resolveEffectiveJudgeModel, resolveServedJudgeModel, resolveClientServedModel, JUDGE_UNAVAILABLE_CODE } from './judge-client.js';
 import { defaultKForTaskType, K_CONFIGS } from './config.js';
 
 /**
@@ -65,20 +65,40 @@ export async function heavy_think(options) {
   const judgeClient = options.judgeClient || null;
   // WHICH client serves the judge, and WHICH model it uses.
   const judgeRoute = resolveJudgeClient({ client, judgeClient });
-  // The model that ACTUALLY serves every judge call in this heavy_think
+  // The model that is INTENDED to serve every judge call in this heavy_think
   // call: `prmConfig.model || judgeRoute.model`. The per-call override
-  // travels into the generate options and every client honours `opts.model`
-  // over its own default, so the override decides which model produces the
-  // score. Resolved ONCE, here, so the cache key, the score's own
-  // `judge_model` and the pair record's judge tags cannot disagree about
-  // which model produced the verdict (kanban t_dc053dc2).
+  // travels into the generate options, and the clients that HONOUR
+  // `opts.model` serve it over their own default — so for those clients the
+  // override decides which model produces the score. Resolved ONCE, here, so
+  // the cache key, the score's own `judge_model` and the pair record's judge
+  // tags cannot disagree about which model produced the verdict (kanban
+  // t_dc053dc2).
   //
   // The cache key MUST use this model too: a key built from the serving
   // client's default while the score is produced by the override would
   // serve a score produced by one model under a record that names another.
-  const effectiveJudgeModel = resolveEffectiveJudgeModel({
+  const intendedJudgeModel = resolveEffectiveJudgeModel({
     prmConfig,
     judgeRoute,
+  });
+  // The model that will ACTUALLY serve, when the judge client can say so
+  // BEFORE the call (kanban t_49d955b7). A client that ignores `opts.model`
+  // — AWARE's Ollama judge did — would otherwise have the cache key built
+  // from the override while the score came from the client's own model: a
+  // score produced by one model served under a key that names another.
+  //
+  // This is the PRE-CALL half of the served-model contract. The post-call
+  // half (`served_model` on the score) is authoritative and is preferred
+  // when the record is written.
+  const judgeGenOpts = {
+    task_type,
+    phase: 'prm_score',
+    ...(prmConfig.model ? { model: prmConfig.model } : {}),
+  };
+  const effectiveJudgeModel = resolveClientServedModel({
+    client: judgeRoute.client,
+    genOpts: judgeGenOpts,
+    fallback: intendedJudgeModel,
   });
   const pairPath = options.preferencePairPath || null;
   const cache = options.cache || null;  // Phase 2.2 — optional PRM score cache
@@ -221,12 +241,18 @@ export async function heavy_think(options) {
   // 'diagnostic' unless the judge is an independent model family AND the
   // caller declared a gating role.
   //
-  // THE EFFECTIVE JUDGE MODEL (kanban t_dc053dc2). The model that served the
-  // score is `prmConfig.model || judgeRoute.model`: the per-call override
-  // travels into the generate options and every client honours `opts.model`
-  // over its own default, so the override really does decide which model
-  // produced the verdict. The judge tags must therefore be computed from
-  // THAT model — not from the serving client's default.
+  // THE EFFECTIVE JUDGE MODEL (kanban t_dc053dc2). The model that is
+  // INTENDED to serve the score is `prmConfig.model || judgeRoute.model`:
+  // the per-call override travels into the generate options, and the
+  // clients that HONOUR `opts.model` serve it over their own default, so
+  // for those clients the override really does decide which model produced
+  // the verdict.
+  //
+  // A client that does NOT honour `opts.model` serves its OWN model, so
+  // the intended model is not necessarily the served one (kanban
+  // t_49d955b7). The judge tags must therefore be computed from the SERVED
+  // model — what the client reported it actually did on the wire — and not
+  // from the intended model, nor from the serving client's default.
   //
   // Before this, the override was honoured only when a `judgeClient` was
   // configured. In the no-`judgeClient` branch — AWARE's production default,
@@ -266,9 +292,23 @@ export async function heavy_think(options) {
   // `effectiveJudgeModel` is resolved once, near the top of this function
   // (see `resolveEffectiveJudgeModel` above), so the cache key, the score's
   // own `judge_model` and these tags all name the same model.
+  //
+  // THE SERVED MODEL WINS (kanban t_49d955b7). `effectiveJudgeModel` is the
+  // INTENDED model. A judge client that ignores `opts.model` serves its OWN
+  // model, so the score carries `served_model` — what the client actually
+  // did on the wire. The record's judge tags are computed from THAT, so the
+  // record cannot name a model that did not serve and the independence
+  // verdict cannot be computed against the wrong model.
+  const servedJudgeModel = resolveServedJudgeModel({
+    scores: [
+      refinedJudge,
+      ...scored.map((a) => a.prm_meta),
+    ],
+    fallback: effectiveJudgeModel,
+  });
   const judge = describeJudge({
     candidateModel: client?.model || null,
-    judgeModel: effectiveJudgeModel,
+    judgeModel: servedJudgeModel,
     role: prmConfig.role || null,
   });
   let pair_written = false;

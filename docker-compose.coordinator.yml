@@ -222,7 +222,14 @@ services:
     # record named the model that was ASKED FOR rather than the model that
     # SERVED, and the Ollama judge path ignored the per-call override
     # entirely. 0.4.8 ships the served-model contract.
-    image: aware-coordinator:0.4.8-served-model-deployed
+    # 2026-11-19 (t_92708010): bumped to 0.4.9-config-guard-deployed. The
+    # 0.4.8 image shipped the PRE-t_866475db config layer, so the boot-time
+    # judge-independence refusal applied to AWARE_JUDGE_MODEL only.
+    # AWARE_JUDGE_OLLAMA_MODEL -- the same kind of judge, named by a
+    # different env var -- was exempt from the model-FAMILY refusal, so a
+    # same-family Ollama judge was ACCEPTED at boot and the operator was
+    # told the configuration was valid. 0.4.9 ships the config-time guard.
+    image: aware-coordinator:0.4.9-config-guard-deployed
     container_name: aware-2-coordinator
     ports:
       - "18081:8080"
@@ -505,7 +512,12 @@ services:
     # trainer ships the same judge-family resolver as the coordinator.
     # 2026-11-19 (t_9be93b08): bumped to 0.4.8-served-model-deployed so the
     # trainer ships the same served-model judge contract as the coordinator.
-    image: aware-coordinator:0.4.8-served-model-deployed
+    # 2026-11-19 (t_92708010): bumped to 0.4.9-config-guard-deployed so the
+    # trainer ships the same config-time judge-independence guard as the
+    # coordinator. The trainer reads the same judge configuration, so a
+    # trainer without the guard would refuse a configuration the coordinator
+    # accepts (and vice versa) -- the two must agree.
+    image: aware-coordinator:0.4.9-config-guard-deployed
     container_name: aware-2-trainer
     profiles: ["training"]
     command: ["node", "src/trainer/index.js"]

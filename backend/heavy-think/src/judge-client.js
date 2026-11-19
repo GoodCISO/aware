@@ -57,6 +57,100 @@ export const JUDGE_CLIENT_SOURCE = Object.freeze({
 export const JUDGE_UNAVAILABLE_CODE = 'judge_client_unavailable';
 
 /**
+ * The result key a judge client uses to report WHICH MODEL ACTUALLY SERVED
+ * the call (kanban t_49d955b7).
+ *
+ * WHY THIS EXISTS
+ * ---------------
+ * The effective-model resolution (`resolveEffectiveJudgeModel`) reasons about
+ * INTENT: it picks `prmConfig.model` over the serving client's default. That
+ * is only the served model if the client HONOURS `opts.model` — and a client
+ * is free not to. AWARE's Ollama judge client did not: it posted its own
+ * configured model and never read `genOpts.model`, so the record named a
+ * model that did not serve the score.
+ *
+ * The record must be able to name the model that SERVED, not the model that
+ * was ASKED FOR. A client that knows which model it served reports it under
+ * this key, and the record prefers it over the resolved intent.
+ *
+ * A client that does NOT report a served model is not wrong — it is simply
+ * silent, and the resolved intent stands. The contract is opt-in and
+ * additive: `result.served_model` is an extra key on the generate result,
+ * never a replacement for `reasoning` / `cost_usd`.
+ */
+export const SERVED_MODEL_KEY = 'served_model';
+
+/**
+ * Read the model a judge client reported as having served the call.
+ *
+ * @param {*} result — the generate() result.
+ * @returns {string|null} the served model id, or null when the client did
+ *          not report one (or reported a blank one).
+ */
+export function readServedModel(result) {
+  if (!result || typeof result !== 'object') return null;
+  const served = result[SERVED_MODEL_KEY];
+  if (typeof served !== 'string') return null;
+  const trimmed = served.trim();
+  return trimmed || null;
+}
+
+/**
+ * The model that SERVED a set of judge scores, when the scores report one.
+ *
+ * A judge client's report is authoritative — it knows what it did on the
+ * wire. The scores are consulted in order, so the caller passes the score
+ * that backs the record's primary verdict first.
+ *
+ * @param {Object} [opts]
+ * @param {Array} [opts.scores] — score objects carrying `served_model`.
+ * @param {string|null} [opts.fallback] — the intended model, used when no
+ *        score reported a served model.
+ * @returns {string|null}
+ */
+export function resolveServedJudgeModel({ scores = [], fallback = null } = {}) {
+  for (const score of scores) {
+    const served = readServedModel(score);
+    if (served) return served;
+  }
+  return fallback;
+}
+
+/**
+ * The model a judge client says it WILL serve for a given call.
+ *
+ * A judge client MAY implement `resolveServedModel(genOpts)` to answer this
+ * question BEFORE the call is made — which is what the PRM cache key needs,
+ * because the key must be computed before any score exists. A client that
+ * does not implement it is not wrong: it is silent, and the caller falls
+ * back to the intended model.
+ *
+ * This is the pre-call half of the served-model contract; `served_model` on
+ * the generate result is the post-call half. When both are available they
+ * agree, and the post-call report is the one the record trusts.
+ *
+ * @param {Object} [opts]
+ * @param {Object} [opts.client] — the judge client.
+ * @param {Object} [opts.genOpts] — the generate options the call will carry.
+ * @param {string|null} [opts.fallback] — the intended model, used when the
+ *        client cannot say what it will serve.
+ * @returns {string|null}
+ */
+export function resolveClientServedModel({ client = null, genOpts = {}, fallback = null } = {}) {
+  if (!client || typeof client.resolveServedModel !== 'function') return fallback;
+  let resolved;
+  try {
+    resolved = client.resolveServedModel(genOpts);
+  } catch {
+    // A client that cannot answer must not break the call path.
+    return fallback;
+  }
+  if (typeof resolved !== 'string') return fallback;
+  const trimmed = resolved.trim();
+  return trimmed || fallback;
+}
+
+/**
  * Resolve the judge for a heavy_think call.
  *
  * @param {Object} [opts]
@@ -83,8 +177,16 @@ export function resolveJudgeClient({ client = null, judgeClient = null } = {}) {
  *
  * `options.prm.model` is the documented per-call judge model override. It
  * travels into the generate options (`src/prm.js`: `genOpts.model =
- * prmConfig.model`) and every AWARE client honours `opts.model` over its own
- * default — so the override really does decide which model serves the score.
+ * prmConfig.model`) and the clients that HONOUR `opts.model` serve the
+ * override instead of their own default — so for those clients the override
+ * really does decide which model serves the score.
+ *
+ * NOT every client honours it. A client is free to ignore `opts.model`, and
+ * one that does would serve its OWN model while this helper reported the
+ * override — the record would then name a model that did not serve
+ * (kanban t_49d955b7). This helper therefore resolves the INTENDED model;
+ * the SERVED model, when a client reports one, wins over it (see
+ * `readServedModel` and `src/prm.js`).
  *
  * This is the ONE place the effective judge model is resolved, so the score
  * (`src/prm.js`) and the pair record's judge tags (`src/index.js`) cannot

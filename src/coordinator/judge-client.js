@@ -58,13 +58,34 @@ export async function buildDefaultJudgeClient(opts = {}) {
       name: 'judge-ollama',
       model: judgeOllamaModel,
       offline: true,
+      // The PRE-CALL half of the served-model contract (kanban
+      // t_49d955b7). The pair record must name the model that ACTUALLY
+      // served the score, and this client is the one that decides which
+      // model that is: it serves `opts.model` when the caller overrides it,
+      // and its own configured model otherwise. The PRM cache key is built
+      // BEFORE any score exists, so it needs this answer here.
+      resolveServedModel(genOpts = {}) {
+        const override = typeof genOpts?.model === 'string' ? genOpts.model.trim() : '';
+        return override || judgeOllamaModel;
+      },
       async generate(prompt, genOpts = {}) {
         const baseUrl = opts.ollamaUrl || config.model.ollamaUrl;
+        // WHICH MODEL SERVES. The per-call override (`prmConfig.model`,
+        // carried in `genOpts.model`) wins over the client's own default,
+        // matching the provider branch below and the rest of AWARE's
+        // clients.
+        //
+        // Before this, the Ollama judge client posted `judgeOllamaModel`
+        // and never read `genOpts.model`: the per-call override was
+        // silently ignored on THIS path, so the pair record named a model
+        // that did not serve (kanban t_49d955b7).
+        const servedModel =
+          (typeof genOpts.model === 'string' ? genOpts.model.trim() : '') || judgeOllamaModel;
         const res = await fetch(`${baseUrl}/api/generate`, {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({
-            model: judgeOllamaModel,
+            model: servedModel,
             prompt,
             stream: false,
             think: genOpts.think === undefined ? false : genOpts.think,
@@ -76,7 +97,14 @@ export async function buildDefaultJudgeClient(opts = {}) {
           throw new Error(`Judge Ollama API ${res.status} ${res.statusText}: ${body.slice(0, 500)}`);
         }
         const data = await res.json();
-        return { reasoning: data.response || '', cost_usd: 0 };
+        return {
+          reasoning: data.response || '',
+          cost_usd: 0,
+          // The POST-CALL half of the served-model contract: what this
+          // client actually put on the wire. The record trusts this over
+          // the resolved intent.
+          served_model: servedModel,
+        };
       },
     };
   }
@@ -102,10 +130,25 @@ export async function buildDefaultJudgeClient(opts = {}) {
   return {
     name: 'judge',
     model: judgeModel,
+    // The PRE-CALL half of the served-model contract (kanban
+    // t_49d955b7). The provider client honours `opts.model` over its own
+    // default, so the served model is the override when there is one.
+    resolveServedModel(genOpts = {}) {
+      const override = typeof genOpts?.model === 'string' ? genOpts.model.trim() : '';
+      return override || judgeModel;
+    },
     // The judge must NEVER be routed to the producer's backend. A router
     // here would reintroduce the same-family fallback this card removes.
     async generate(prompt, genOpts = {}) {
-      return await client.generate(prompt, genOpts);
+      const result = await client.generate(prompt, genOpts);
+      // The POST-CALL half of the served-model contract. The underlying
+      // client reports what it put on the wire; when it does not, fall
+      // back to what this wrapper knows it asked for.
+      const servedModel =
+        typeof result?.served_model === 'string' && result.served_model.trim()
+          ? result.served_model.trim()
+          : (typeof genOpts.model === 'string' ? genOpts.model.trim() : '') || judgeModel;
+      return { ...result, served_model: servedModel };
     },
   };
 }

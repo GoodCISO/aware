@@ -217,7 +217,12 @@ services:
     # config-time guard ran the MIRROR while the runtime guard ran the
     # canonical module -- two independent implementations of the same rule
     # in production. 0.4.7 resolves /app/rl-pipeline/src/judge-family.js.
-    image: aware-coordinator:0.4.7-judge-family-deployed
+    # 2026-11-19 (t_9be93b08): bumped to 0.4.8-served-model-deployed. The
+    # 0.4.7 image shipped the PRE-t_49d955b7 judge client, so the pair
+    # record named the model that was ASKED FOR rather than the model that
+    # SERVED, and the Ollama judge path ignored the per-call override
+    # entirely. 0.4.8 ships the served-model contract.
+    image: aware-coordinator:0.4.8-served-model-deployed
     container_name: aware-2-coordinator
     ports:
       - "18081:8080"
@@ -498,7 +503,9 @@ services:
     # the host. See the coordinator service above.
     # 2026-11-19 (t_3212eebd): bumped to 0.4.7-judge-family-deployed so the
     # trainer ships the same judge-family resolver as the coordinator.
-    image: aware-coordinator:0.4.7-judge-family-deployed
+    # 2026-11-19 (t_9be93b08): bumped to 0.4.8-served-model-deployed so the
+    # trainer ships the same served-model judge contract as the coordinator.
+    image: aware-coordinator:0.4.8-served-model-deployed
     container_name: aware-2-trainer
     profiles: ["training"]
     command: ["node", "src/trainer/index.js"]

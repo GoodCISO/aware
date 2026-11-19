@@ -67,6 +67,14 @@ test('judge-family: the mirror agrees with the producer on every case', () => {
   // The drift check: the config-time guard and the runtime guard must not
   // disagree, or the config accepts a judge the producer then treats as
   // same-family.
+  //
+  // NOTE: this compares the PUBLIC SURFACE against the producer. It is
+  // kept as the coarse check it always was. The LOAD-BEARING check — the
+  // one that exercises the MIRROR'S OWN algorithm rather than the module it
+  // delegates to — lives in `judge-family-fallback.test.js`
+  // (t_8b44fe9d): with the vendored copy present, this test alone could
+  // not detect a mutation of the mirror's own rule logic, because the
+  // mirror delegates to the producer.
   if (!fs.existsSync(PRODUCER_FAMILY_MODULE)) {
     // The published npm package ships src/config/ but NOT backend/.
     assert.ok(true, 'the vendored producer copy is not present in this tree');
@@ -105,6 +113,12 @@ test('judge-family: the mirror agrees with the producer on every case', () => {
 test('judge-family: the mirror PREFERS the live vendored producer module', () => {
   // When the vendored copy is present the mirror must use it, so the
   // config-time guard cannot drift from the runtime guard.
+  //
+  // The resolver now looks in the DEPLOYED layout too
+  // (`<app>/rl-pipeline/src/judge-family.js`), so the "vendored copy is
+  // present" branch is no longer the only way to resolve a live module
+  // (t_8b44fe9d). The fallback layout — no canonical module in ANY known
+  // layout — is asserted in `judge-family-fallback.test.js`.
   const live = mirror.resolveFamilyModule();
   if (!fs.existsSync(PRODUCER_FAMILY_MODULE)) {
     assert.equal(live, null, 'no live module without the vendored copy');
@@ -112,6 +126,12 @@ test('judge-family: the mirror PREFERS the live vendored producer module', () =>
   }
   assert.ok(live, 'the mirror must resolve the live vendored producer module');
   assert.equal(typeof live.resolveModelFamily, 'function');
+
+  // The resolution records WHICH tree answered and WHY.
+  const resolution = mirror.familyModuleResolution({ fresh: true });
+  assert.equal(resolution.source, 'live');
+  assert.equal(resolution.reasonCode, 'resolved');
+  assert.equal(resolution.path, PRODUCER_FAMILY_MODULE);
 });
 
 test('judge-family: the mirrored rule table matches the producer rule table', () => {

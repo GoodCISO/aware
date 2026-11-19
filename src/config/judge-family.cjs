@@ -37,6 +37,31 @@
 // (`^google(?:gemini|palm)`): a bare `^google` swept Gemma into the Gemini
 // family, which made the gemma/gemini pair's verdict depend on ARGUMENT
 // ORDER.
+//
+// WHERE THE CANONICAL MODULE ACTUALLY LIVES (t_8b44fe9d)
+// ------------------------------------------------------
+// The resolver below looks for the canonical producer module at
+// `<repo>/backend/heavy-think/src/judge-family.js`. That path is the REPO
+// layout only. The DEPLOYED coordinator image ships the same file at
+// `/app/rl-pipeline/src/judge-family.js` (Dockerfile.coordinator COPYs
+// `backend/heavy-think/src` -> `./rl-pipeline/src`) and has NO `/app/backend`
+// at all — so in production the resolver found nothing and the config-time
+// guard silently ran the MIRROR while the runtime guard
+// (`/app/rl-pipeline/src/judge-family.js`) ran the canonical module. The two
+// were kept in step only by a drift test that, in a tree where the vendored
+// copy is present, compares the mirror against ITSELF (the mirror delegates
+// to the live module), so the mirror's own algorithm was never executed by
+// the suite.
+//
+// `resolveFamilyModule` now resolves the DEPLOYED layout first (via
+// `AWARE_RL_PIPELINE_PATH`, the same env var the coordinator's other
+// live-tree resolvers use), then the repo layout, then the dev-layout
+// sibling. The mirror's OWN algorithm is exported and drift-checked
+// directly, so it cannot diverge silently even where the canonical module
+// cannot be loaded at all.
+//
+// `require()` failure is NOT silent: the reason is recorded and surfaced
+// (see `familyModuleResolution` / `resolveFamilyModule`).
 
 'use strict';
 
@@ -352,35 +377,194 @@ function resolveModelFamilyFromRules(model, rules) {
 
 // ─── live-module resolution ───────────────────────────────────────────────
 
-let liveModule;
+let familyModuleResolutionCache;
 
 /**
- * Prefer the LIVE vendored family module, so the config-time guard cannot
+ * The canonical producer module paths to try, in priority order.
+ *
+ * The FIRST candidate that EXISTS is the tree the coordinator actually runs
+ * and is DECISIVE — the next candidate is a different tree, and answering
+ * for it proves nothing about the one in production.
+ *
+ * 1. `deployed` — the directory of `AWARE_RL_PIPELINE_PATH`. In the
+ *    coordinator image that is `/app/rl-pipeline/src`, the copy the
+ *    runtime guard executes. This is the same env var the coordinator's
+ *    other live-tree resolvers use (`src/config/rlm.cjs`,
+ *    `src/config/rl-pipeline-build.cjs`).
+ * 2. `deployed-layout` — `<app>/rl-pipeline/src/judge-family.js`, resolved
+ *    relative to THIS module. The image ships the canonical module there
+ *    (Dockerfile.coordinator COPYs `backend/heavy-think/src` ->
+ *    `./rl-pipeline/src`) and has NO `/app/backend` at all, so before
+ *    t_8b44fe9d the config-time guard silently ran the MIRROR while the
+ *    runtime guard ran the canonical module.
+ * 3. `vendored` — the repo's copy at
+ *    `<repo>/backend/heavy-think/src/judge-family.js`. This is what the
+ *    test-suite and a source checkout run against.
+ * 4. `dev-layout` — the sibling checkout at `<repo>/../rl-pipeline/src`.
+ *
+ * @param {Object} [env]
+ * @returns {Array<{path: string, source: string}>}
+ */
+function familyModuleCandidates(env) {
+  const e = env || process.env;
+  const out = [];
+
+  const fromEnv = e.AWARE_RL_PIPELINE_PATH;
+  if (fromEnv && String(fromEnv).trim()) {
+    out.push({
+      path: path.join(
+        path.dirname(path.resolve(String(fromEnv).trim())),
+        'judge-family.js'
+      ),
+      source: 'deployed',
+    });
+  }
+
+  // src/config/judge-family.cjs -> src/config -> src -> <app> -> ../../ -> <app>
+  out.push({
+    path: path.resolve(__dirname, '..', '..', 'rl-pipeline', 'src', 'judge-family.js'),
+    source: 'deployed-layout',
+  });
+
+  out.push({
+    path: path.resolve(
+      __dirname, '..', '..', 'backend', 'heavy-think', 'src', 'judge-family.js'
+    ),
+    source: 'vendored',
+  });
+
+  // src/config/judge-family.cjs -> ../../.. -> the parent of the repo
+  out.push({
+    path: path.resolve(__dirname, '..', '..', '..', 'rl-pipeline', 'src', 'judge-family.js'),
+    source: 'dev-layout',
+  });
+
+  // De-duplicate by path, keeping the FIRST source label.
+  const seen = new Set();
+  return out.filter((c) => {
+    if (seen.has(c.path)) return false;
+    seen.add(c.path);
+    return true;
+  });
+}
+
+/**
+ * Resolve the canonical producer module, and RECORD WHY it was or was not
+ * found.
+ *
+ * `require()` failure is NOT silent. A candidate that exists but cannot be
+ * loaded (an ES module on a runtime below Node 22.12, a syntax error, a
+ * broken vendored copy) yields `source: 'mirror'` with `reasonCode:
+ * 'load-failed'` and a human-readable `reason` naming the path and the
+ * error. The reason is warned about once and is also reachable through
+ * `familyModuleResolution()`, so the config layer can surface it in
+ * `config.warnings()`.
+ *
+ * A candidate that does not exist at all yields `reasonCode: 'absent'`,
+ * which is NOT an anomaly: the published npm package ships `src/config/`
+ * but not `backend/`, so the mirror is the only implementation there.
+ *
+ * @param {Object} [opts]
+ * @param {Object} [opts.env] the environment to resolve against
+ * @param {boolean} [opts.fresh] ignore the cached resolution
+ * @returns {{module: Object|null, path: string|null, source: string, reasonCode: string, reason: string, candidate: Object|null, candidates: Array}}
+ */
+function familyModuleResolution(opts = {}) {
+  const env = opts.env || process.env;
+  if (!opts.fresh && opts.env === undefined && familyModuleResolutionCache) {
+    return familyModuleResolutionCache;
+  }
+
+  const candidates = familyModuleCandidates(env);
+  const existing = candidates.filter((c) => fs.existsSync(c.path));
+
+  let resolution;
+  if (existing.length === 0) {
+    resolution = {
+      module: null,
+      path: null,
+      source: 'mirror',
+      reasonCode: 'absent',
+      reason:
+        'no canonical model-family module was found in any known layout ' +
+        `(${candidates.map((c) => c.path).join(', ')}); the config-time guard is ` +
+        'running the MIRRORED family map',
+      candidate: null,
+      candidates,
+    };
+  } else {
+    const candidate = existing[0];
+    let mod = null;
+    let reasonCode = 'absent';
+    let reason = '';
+    try {
+      mod = require(candidate.path);
+      if (!mod || typeof mod.resolveModelFamily !== 'function') {
+        reasonCode = 'invalid';
+        reason =
+          `the canonical model-family module at ${candidate.path} (${candidate.source}) ` +
+          'does not export resolveModelFamily; the config-time guard is running the ' +
+          'MIRRORED family map';
+        mod = null;
+      }
+    } catch (err) {
+      reasonCode = 'load-failed';
+      reason =
+        `the canonical model-family module at ${candidate.path} (${candidate.source}) ` +
+        `could not be loaded (${err && err.message ? err.message : String(err)}); ` +
+        'the config-time guard is running the MIRRORED family map';
+      mod = null;
+    }
+    resolution = {
+      module: mod,
+      path: mod ? candidate.path : null,
+      source: mod ? 'live' : 'mirror',
+      reasonCode: mod ? 'resolved' : reasonCode,
+      reason: mod ? '' : reason,
+      candidate,
+      candidates,
+    };
+  }
+
+  // A load failure is never silent. The 'absent' case is normal (the
+  // published npm package ships no backend/), so it is not warned about.
+  if (resolution.reasonCode === 'load-failed' || resolution.reasonCode === 'invalid') {
+    // eslint-disable-next-line no-console
+    console.warn(`[aware-config] judge-family: ${resolution.reason}`);
+  }
+
+  if (opts.env === undefined && !opts.fresh) {
+    familyModuleResolutionCache = resolution;
+  }
+  return resolution;
+}
+
+/**
+ * Forget the cached live-module resolution. Test-only: the resolution is
+ * cached for the process lifetime because the live tree does not change
+ * under a running coordinator.
+ */
+function resetFamilyModuleCache() {
+  familyModuleResolutionCache = undefined;
+}
+
+/**
+ * Prefer the LIVE canonical family module, so the config-time guard cannot
  * drift from the producer's runtime guard. Falls back to the mirrored
- * implementation when the vendored copy is absent (the published npm package
- * ships `src/config/` but NOT `backend/`).
+ * implementation when the canonical copy is absent (the published npm
+ * package ships `src/config/` but NOT `backend/`).
  *
- * require() of an ES module works on Node >= 22.12; older runtimes and any
- * load failure fall through to the mirror.
+ * require() of an ES module works on Node >= 22.12; on an older runtime
+ * the load fails and the reason is RECORDED (see `familyModuleResolution`)
+ * rather than swallowed.
  *
+ * @param {Object} [opts]
+ * @param {Object} [opts.env]
+ * @param {boolean} [opts.fresh]
  * @returns {Object|null}
  */
-function resolveFamilyModule() {
-  if (liveModule !== undefined) return liveModule;
-  const candidate = path.resolve(
-    __dirname, '..', '..', 'backend', 'heavy-think', 'src', 'judge-family.js'
-  );
-  liveModule = null;
-  try {
-    if (!fs.existsSync(candidate)) return liveModule;
-    const mod = require(candidate);
-    if (mod && typeof mod.resolveModelFamily === 'function') {
-      liveModule = mod;
-    }
-  } catch {
-    liveModule = null;
-  }
-  return liveModule;
+function resolveFamilyModule(opts = {}) {
+  return familyModuleResolution(opts).module;
 }
 
 /**
@@ -433,12 +617,58 @@ function isCorpusTrainedArtefact(model) {
  * @returns {boolean} false when either id resolves to no family.
  */
 function sameModelFamily(candidateModel, judgeModel) {
-  const a = resolveModelFamily(candidateModel).group;
-  const b = resolveModelFamily(judgeModel).group;
+  return sameModelFamilyWithResolver(candidateModel, judgeModel, resolveModelFamily);
+}
+
+/**
+ * The SAME-FAMILY comparison, over an EXPLICIT resolver.
+ *
+ * This is the mirror's OWN algorithm, parameterised by the way a model id is
+ * resolved. `sameModelFamily` passes the LIVE resolver (the canonical
+ * producer module when it is present, the mirrored rules otherwise); the
+ * drift test passes a resolver backed ONLY by the mirrored rules, so the
+ * mirror's own rule logic — the prefix threshold, the lineage fallback —
+ * is the thing actually under test.
+ *
+ * Before t_8b44fe9d the mirror's own implementation was never executed by
+ * the suite in a tree where the vendored copy was present: the mirror
+ * delegated to the producer, so the drift test compared the producer
+ * against ITSELF, and a mutation of the mirror's prefix threshold
+ * (`>= 3` -> `>= 6`) passed the whole suite.
+ *
+ * @param {*} candidateModel
+ * @param {*} judgeModel
+ * @param {function(*): {group: string, family: string, corpusTrained: boolean}} resolve
+ * @returns {boolean}
+ */
+function sameModelFamilyWithResolver(candidateModel, judgeModel, resolve) {
+  const a = resolve(candidateModel).group;
+  const b = resolve(judgeModel).group;
   if (!a || !b) return false;
   if (a === b) return true;
   const [shorter, longer] = a.length <= b.length ? [a, b] : [b, a];
   return shorter.length >= 3 && longer.startsWith(shorter);
+}
+
+/**
+ * The mirror's OWN same-family comparison, driven ONLY by the mirrored
+ * rule tables — never by the live canonical module.
+ *
+ * This is the implementation that runs wherever the canonical module cannot
+ * be loaded (the published npm package, and the deployed image before
+ * t_8b44fe9d fixed the resolver's path).
+ *
+ * @param {*} candidateModel
+ * @param {*} judgeModel
+ * @param {Array} [rules]
+ * @returns {boolean}
+ */
+function sameModelFamilyFromRules(candidateModel, judgeModel, rules = MIRRORED_MODEL_FAMILY_RULES) {
+  return sameModelFamilyWithResolver(
+    candidateModel,
+    judgeModel,
+    (model) => resolveModelFamilyFromRules(model, rules)
+  );
 }
 
 /**
@@ -457,11 +687,44 @@ function sameModelFamily(candidateModel, judgeModel) {
  * @returns {boolean}
  */
 function isIndependentJudge(candidateModel, judgeModel) {
-  const candidate = resolveModelFamily(candidateModel);
-  const judge = resolveModelFamily(judgeModel);
+  return isIndependentJudgeWithResolver(candidateModel, judgeModel, resolveModelFamily);
+}
+
+/**
+ * The INDEPENDENCE rule, over an EXPLICIT resolver.
+ *
+ * The same-family comparison is made with the SAME resolver, so a caller
+ * that exercises the mirror's own rules exercises the mirror's own
+ * same-family rule too — not the live module's.
+ *
+ * @param {*} candidateModel
+ * @param {*} judgeModel
+ * @param {function(*): {group: string, family: string, corpusTrained: boolean}} resolve
+ * @returns {boolean}
+ */
+function isIndependentJudgeWithResolver(candidateModel, judgeModel, resolve) {
+  const candidate = resolve(candidateModel);
+  const judge = resolve(judgeModel);
   if (!candidate.family || !judge.family) return false;
   if (judge.corpusTrained) return false;
-  return !sameModelFamily(candidateModel, judgeModel);
+  return !sameModelFamilyWithResolver(candidateModel, judgeModel, resolve);
+}
+
+/**
+ * The mirror's OWN independence rule, driven ONLY by the mirrored rule
+ * tables — never by the live canonical module.
+ *
+ * @param {*} candidateModel
+ * @param {*} judgeModel
+ * @param {Array} [rules]
+ * @returns {boolean}
+ */
+function isIndependentJudgeFromRules(candidateModel, judgeModel, rules = MIRRORED_MODEL_FAMILY_RULES) {
+  return isIndependentJudgeWithResolver(
+    candidateModel,
+    judgeModel,
+    (model) => resolveModelFamilyFromRules(model, rules)
+  );
 }
 
 module.exports = {
@@ -475,10 +738,25 @@ module.exports = {
   MIRRORED_MODEL_FAMILY_GROUPS,
   resolveFamilyModule,
   // The mirror's OWN rule-driven resolver. `resolveModelFamily` delegates to
-  // the live vendored producer module whenever it is present, so this
-  // export is the only way to exercise the mirrored ALGORITHM itself —
-  // which is what runs in the deployed image, where the resolver does not
-  // find the canonical module (t_2ca310b8; sibling card t_8b44fe9d owns
-  // the broader fallback-layout coverage).
+  // the live canonical producer module whenever it is present, so this
+  // export is the only way to exercise the mirrored ALGORITHM itself.
   resolveModelFamilyFromRules,
+  // The mirror's OWN same-family and independence rules, driven ONLY by the
+  // mirrored rule tables. Without these the suite cannot detect a mutation
+  // of the mirror's own algorithm (its prefix threshold, its lineage
+  // fallback) in a tree where the canonical module IS present — the mirror
+  // delegates, so the drift test compared the producer against itself.
+  // (t_8b44fe9d)
+  sameModelFamilyFromRules,
+  isIndependentJudgeFromRules,
+  // The rule logic, parameterised by an explicit resolver.
+  sameModelFamilyWithResolver,
+  isIndependentJudgeWithResolver,
+  // The live-module resolution, WITH the reason it succeeded or failed.
+  // `resolveFamilyModule()` alone cannot distinguish "no canonical module
+  // anywhere" from "the canonical module is there but could not be loaded",
+  // which is exactly the silent degradation t_8b44fe9d exists to remove.
+  familyModuleResolution,
+  familyModuleCandidates,
+  resetFamilyModuleCache,
 };

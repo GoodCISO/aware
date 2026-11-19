@@ -96,6 +96,84 @@ function redact(name, value) {
   return value;
 }
 
+// --- judge independence -------------------------------------------------
+
+/**
+ * The judge model paths — EVERY way an operator can name a judge.
+ *
+ * The provider judge (`AWARE_JUDGE_MODEL`) and the Ollama-hosted judge
+ * (`AWARE_JUDGE_OLLAMA_MODEL`) are the same kind of judge: a model that
+ * grades the candidate's traces. They differ only in WHICH env var carries
+ * the model id, so they must be subject to the SAME refusals (kanban
+ * t_866475db — before that card the family refusal applied to the provider
+ * judge only, and the Ollama judge was exempt from everything except the
+ * corpus-trained-artefact check).
+ *
+ * This is the ONE registry of judge paths. `config.validate()` walks it,
+ * so a third judge path cannot arrive un-refused: adding a judge model
+ * means adding an entry here, and the walk then applies both refusals to
+ * it. `read()` is lazy so the value is read at validation time, not at
+ * module-load time (the config object's getters are lazy by design).
+ *
+ * Each entry carries BOTH the env var the operator sets (`envVar`) and the
+ * config property that exposes it (`key`), so the error message can name
+ * the env var while a structural test can sweep the CONFIG's judge
+ * properties against the registry.
+ *
+ * @type {ReadonlyArray<{envVar: string, key: string, read: function(): string}>}
+ */
+const JUDGE_MODEL_PATHS = Object.freeze([
+  Object.freeze({
+    envVar: 'AWARE_JUDGE_MODEL',
+    key: 'judgeModel',
+    read: () => config.model.judgeModel,
+  }),
+  Object.freeze({
+    envVar: 'AWARE_JUDGE_OLLAMA_MODEL',
+    key: 'judgeOllamaModel',
+    read: () => config.model.judgeOllamaModel,
+  }),
+]);
+
+/**
+ * Refuse a judge model that cannot be independent of the candidate.
+ *
+ * TWO refusals, both hard, applied in this order:
+ *
+ *   1. The corpus-trained artefact (`aware-qwen35-9b`) — the model the
+ *      preference pairs TRAIN. It is checked FIRST: it is never independent
+ *      of anything, so the family comparison would refuse it too — but with
+ *      the WRONG reason ("same family as the candidate"), when the real
+ *      reason is that it is the model the preference pairs TRAIN. Naming the
+ *      real reason is the point of this guard, so the specific check must
+ *      not be shadowed by the general one.
+ *   2. A judge in the candidate's own model FAMILY — the judge would be
+ *      grading its own house style. The comparison is on the FAMILY, not on
+ *      the id.
+ *
+ * The message names BOTH the env var that was refused and the rule that
+ * fired, so the operator can tell which judge path was rejected and why.
+ * Both refusals live in THIS helper, so the two judge paths cannot drift
+ * apart again.
+ *
+ * @param {string} envVar  the env var the judge model came from
+ * @param {string} judgeModel  the judge model id
+ * @param {string} candidateModel  the candidate (provider) model id
+ * @throws {Error} when the judge model is not independent of the candidate
+ */
+function assertIndependentJudge(envVar, judgeModel, candidateModel) {
+  if (isCorpusTrainedArtefact(judgeModel)) {
+    throw new Error(
+      `Config: ${envVar} (${judgeModel}) must not be the AWARE-trained LoRA artefact — it is the model the preference pairs train, so it cannot judge them independently`
+    );
+  }
+  if (!isIndependentJudge(candidateModel, judgeModel)) {
+    throw new Error(
+      `Config: ${envVar} (${judgeModel}) must be a different model family from AWARE_PROVIDER_MODEL (${candidateModel}) — a judge in the candidate's own model family grades its own house style and can never gate the DPO set`
+    );
+  }
+}
+
 // --- dev-layout fallback path for rl-pipeline ---------------------------
 
 function defaultRlPipelinePath() {
@@ -391,42 +469,38 @@ config.validate = function validate() {
   //      FAMILY, not on the id: a cheaper sibling (`MiniMax-M3` against
   //      `MiniMax-M3.1-Flash`) is the same family and must be refused
   //      too. An id-equality test misses it.
-  //   2. An Ollama judge pointing at `aware-qwen35-9b` — the AWARE-LoRA
-  //      merged artefact, i.e. the model the preference pairs TRAIN. A
-  //      judge trained on the corpus it selects is not independent, and
-  //      the independence is in the wrong direction.
+  //   2. A judge pointing at `aware-qwen35-9b` — the AWARE-LoRA merged
+  //      artefact, i.e. the model the preference pairs TRAIN. A judge
+  //      trained on the corpus it selects is not independent, and the
+  //      independence is in the wrong direction.
   //
   // Both are refused at config time rather than degrading silently: a
   // judge that cannot be independent must not be configurable as one.
   //
+  // EVERY judge path is subject to BOTH refusals. The provider judge
+  // (`AWARE_JUDGE_MODEL`) and the Ollama-hosted judge
+  // (`AWARE_JUDGE_OLLAMA_MODEL`) are the same kind of judge — a model that
+  // grades the candidate's traces — and they differ only in WHICH env var
+  // carries the model id. Before t_866475db the family refusal applied to
+  // the provider judge only, so an Ollama judge could be configured in the
+  // candidate's own family and the boot told the operator the
+  // configuration was valid. The producer's runtime guard then demoted the
+  // pair to a diagnostic, and the operator found the misconfiguration in
+  // the DATA rather than at boot.
+  //
+  // The judge paths are listed in ONE registry (JUDGE_MODEL_PATHS) and
+  // checked by ONE helper (assertIndependentJudge), so a third judge path
+  // cannot arrive un-refused: adding a judge model means adding a
+  // registry entry, and the loop below then applies both refusals to it.
+  //
   // The family map is the PRODUCER's module (backend/heavy-think/src/
   // judge-family.js) via the mirror in ./judge-family.cjs, so this
   // config-time guard and the producer's runtime guard cannot disagree.
-  const judgeModel = config.model.judgeModel;
-  if (judgeModel) {
-    const candidate = config.model.providerModel;
-    // The corpus-trained artefact is checked FIRST: it is never independent
-    // of anything, so the family comparison would refuse it too — but with
-    // the WRONG reason ("same family as the candidate"), when the real
-    // reason is that it is the model the preference pairs TRAIN. Naming the
-    // real reason is the point of this guard, so the specific check must
-    // not be shadowed by the general one.
-    if (isCorpusTrainedArtefact(judgeModel)) {
-      throw new Error(
-        `Config: AWARE_JUDGE_MODEL (${judgeModel}) must not be the AWARE-trained LoRA artefact — it is the model the preference pairs train, so it cannot judge them independently`
-      );
-    }
-    if (!isIndependentJudge(candidate, judgeModel)) {
-      throw new Error(
-        `Config: AWARE_JUDGE_MODEL (${judgeModel}) must be a different model family from AWARE_PROVIDER_MODEL (${candidate}) — a judge in the candidate's own model family grades its own house style and can never gate the DPO set`
-      );
-    }
-  }
-  const judgeOllama = config.model.judgeOllamaModel;
-  if (judgeOllama && isCorpusTrainedArtefact(judgeOllama)) {
-    throw new Error(
-      `Config: AWARE_JUDGE_OLLAMA_MODEL (${judgeOllama}) must not be the AWARE-trained LoRA artefact — it is the model the preference pairs train, so it cannot judge them independently`
-    );
+  const candidate = config.model.providerModel;
+  for (const judgePath of JUDGE_MODEL_PATHS) {
+    const judgeModel = judgePath.read();
+    if (!judgeModel) continue;
+    assertIndependentJudge(judgePath.envVar, judgeModel, candidate);
   }
   // Force-evaluate all lazy accessors so a bad value fails at validate(),
   // not at first request.
@@ -566,5 +640,13 @@ config.snapshot = function snapshot() {
 
 // --- judge independence helpers ---------------------------------------
 
+// The judge-path registry is exported so the test suite can assert the
+// STRUCTURAL property this card exists to establish: every way an operator
+// can name a judge is listed here, and `config.validate()` walks the list.
+// Without the export the registry would be invisible to a test, and a
+// third judge path could be added without the suite noticing that it is
+// un-refused.
 module.exports = config;
 module.exports.default = config;
+module.exports.JUDGE_MODEL_PATHS = JUDGE_MODEL_PATHS;
+module.exports.assertIndependentJudge = assertIndependentJudge;

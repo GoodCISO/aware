@@ -2,6 +2,84 @@
 
 All notable changes to AWARE Evolution are documented here.
 
+## [Unreleased] — POST /v2/mandates (RiskMandate acceptance)
+
+**Kanban:** t_ae57240e
+
+### Added
+
+- **`src/v2/mandates_handler.js`** — server-side handler for
+  `POST /v2/mandates`, the contract in
+  `docs/openapi.yaml#/paths/~1v2~1mandates`. Validates the
+  `MandateCreate` schema hand-rolled against openapi.yaml (8 required
+  fields, 3 enums, RFC3339 `expiry`, `underwriters.minItems: 1`,
+  `additionalProperties: false` at root — a client that supplies a
+  server-set field such as `grant_id` or `agent_constraint_tier` is
+  rejected). Mounted under `/v2` in `src/api/index.js` after the
+  bearer-auth gate, exactly like the sibling `POST /v2/tier-promotions`,
+  so a request without a token gets 401 before it reaches the handler.
+  Status paths: **201** (MandateResponse), **400** (malformed payload,
+  `Error` shape with `error` + `details`), **409** (idempotency hit on
+  `triggering_event_id` — the EXISTING grant is returned in the body so
+  the client can reconcile), **503** (persistence unavailable — 201
+  would be a lie without storage), **500** (write failed).
+- **`src/db/mandates.js`** — `recordMandate(conn, mandate)` writer.
+  Never throws: it returns a structured
+  `{recorded, reason?, mandate?}` result so the request path stays
+  intact. `triggering_event_id` is the idempotency boundary — the
+  insert uses `ON CONFLICT (triggering_event_id) DO NOTHING` and a
+  `23505` unique violation is the same reconciliation hit, so both
+  paths return `{recorded: false, reason: 'duplicate', mandate}` and
+  the handler answers 409 with the existing grant.
+  `resolveAgentConstraintTier()` reads the tier off the triggering
+  `aware_tier_promotions` row (a `tier_promotion` trigger) and falls
+  back to **T0** when no tier can be evidenced — a Mandate response
+  never asserts more autonomy than the evidence supports.
+- **`db/migrations/007_mandates_audit_table.sql`** — forward
+  migration for the `aware_mandates` table: `grant_id` (UUID, UNIQUE),
+  `triggering_event_id` (TEXT, UNIQUE — the 409 guard), the wire-level
+  Mandate fields, a tri-state `lethal_trifecta_flag` (NULL = not
+  computed), and `agent_constraint_tier` (server-set, defaults to T0).
+  Indexes for the three operator queries: lookup by triggering event,
+  a principal's mandate history newest-first, and live expiry windows.
+- **`src/db/index.js`** — re-exports the mandate writer and helpers
+  from the db barrel.
+- **Test suites** — `test/unit/api/mandates-handler.test.js` (59
+  cases: every validation branch and every HTTP status path),
+  `test/unit/api/mandates-mount.test.js` (7 cases: the route really
+  is mounted in the real gateway behind the real bearer-auth gate,
+  and the sibling `/v2/tier-promotions` endpoint is unaffected), and
+  `test/unit/db/mandates.test.js` (32 cases: pure helpers, the writer's
+  happy path, both duplicate paths, and every validation failure).
+
+### Schema-rigor notes
+
+- `openapi.yaml` v1.1.0 replaced `MandateResponse.ramm_level` (an
+  integer 1–5 RM maturity level) with `agent_constraint_tier` (an
+  AWARE T0–T4 constraint tier). The implementation follows the
+  current spec: the response carries `agent_constraint_tier`.
+  `ramm_level` is not emitted, and the CHANGELOG entry that still
+  describes it is superseded by this one.
+- `MandateCreate` requires 8 fields in the current spec;
+  `control_ids` and `lethal_trifecta_flag` are OPTIONAL properties
+  (they were listed as required in an earlier revision of the card
+  body). The spec wins — a payload that omits them is valid.
+- `MandateResponse` is `additionalProperties: false`, so the surrogate
+  `id` column is not on the wire, and `lethal_trifecta_flag` is omitted
+  when the stored value is NULL (the server does not assert a trifecta
+  verdict it has not computed).
+- Unlike `/v2/tier-promotions` (202, best-effort — "the server has
+  recorded the event"), this endpoint's 201 means "durably recorded",
+  so a DB outage is reported as 503 rather than a best-effort accept.
+
+### Out of scope (follow-up cards)
+
+- The RiskMandate API CLIENT — AWARE records acceptances; it does not
+  call `riskmandate.ai`. (The RiskMandate tree was cancelled on
+  2026-11-14, card `t_6ae9a5e7`.)
+- The RM-side hook, the coordinator trigger logic, and UI
+  mandate-history views.
+
 ## [Unreleased] — disclosure record generator (C1)
 
 **This does not close the incident-disclosure gap.** It mechanises it at class granularity only.

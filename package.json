@@ -27,6 +27,7 @@
     "src/extension/",
     "src/engine-secret.js",
     "src/gateway/",
+    "src/governance/",
     "src/index.js",
     "src/kill-switch/",
     "src/monitoring/",

@@ -13,7 +13,10 @@
  *
  *   entityKind="agent"    the unit is a 0..100 TRUST score (NHI). Colour is
  *                          success / warning / error, per the agent screen's
- *                          existing behaviour.
+ *                          existing behaviour. NOTE: the STORED trust score
+ *                          is a fraction in [0,1]; the call site converts with
+ *                          `normaliseTrustScore(...) * 100` before passing it
+ *                          here. This component's own unit remains 0..100.
  *   entityKind="operator" the unit is a 0..1 ANOMALY score (OHI). Colour is
  *                          INVERTED: a high anomaly score is a BAD operator,
  *                          so the ramp runs the other way.

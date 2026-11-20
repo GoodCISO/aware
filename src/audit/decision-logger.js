@@ -596,6 +596,7 @@ async function verifyChain() {
     if (ownHash !== record.hash) {
       return {
         valid: false,
+        integrity: 'broken',
         firstInvalidRecord: record.decisionId,
         error: `Hash mismatch: expected ${ownHash}, got ${record.hash}`,
         ...(skipped > 0 ? { skippedRecords: skipped } : {}),
@@ -620,6 +621,7 @@ async function verifyChain() {
       if (seenHashes.has(record.prevHash)) {
         return {
           valid: false,
+          integrity: 'broken',
           firstInvalidRecord: record.decisionId,
           error: `Chain broken: expected prevHash ${expectedPrevHash}, got ${record.prevHash}`,
           ...(skipped > 0 ? { skippedRecords: skipped } : {}),
@@ -640,8 +642,20 @@ async function verifyChain() {
   // non-zero when a torn write destroyed a record entirely, leaving a
   // gap in the linkage. Both are reported rather than hidden: the hash
   // chain verified, but the log has damage an operator should know about.
+  //
+  // `integrity` is the summary a caller should read. `valid` alone cannot
+  // express this state: it is true whenever the chain over the PARSEABLE
+  // records verifies, which is also true when records were destroyed. A
+  // caller that checked only `valid` would report a damaged log as intact.
+  //
+  //   'unbroken'  every record verified, no records lost.
+  //   'gapped'    the chain verified over what remains, but records were
+  //               lost (torn write). The chain is not a complete record.
+  //   'broken'    a hash mismatch or linkage break — tampering or corruption.
+  const integrity = skipped > 0 || resyncs > 0 ? 'gapped' : 'unbroken';
   return {
     valid: true,
+    integrity,
     recordsVerified: records.length,
     ...(skipped > 0 ? { skippedRecords: skipped } : {}),
     ...(resyncs > 0 ? { resyncs } : {})

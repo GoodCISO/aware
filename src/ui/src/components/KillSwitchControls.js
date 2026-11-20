@@ -5,6 +5,7 @@ import BlockIcon from '@mui/icons-material/Block';
 import RestoreIcon from '@mui/icons-material/Restore';
 import WarningIcon from '@mui/icons-material/Warning';
 import StatusIndicator from './StatusIndicator';
+import { formatTrustScore } from '../constants/trust-score.js';
 
 const KillSwitchControls = ({ agents = [], onRevoke, onRestore, onEmergencyShutdown }) => {
   const [revokeDialogOpen, setRevokeDialogOpen] = useState(false);
@@ -57,7 +58,7 @@ const KillSwitchControls = ({ agents = [], onRevoke, onRestore, onEmergencyShutd
               <TableRow key={agent.id}>
                 <TableCell>{agent.name}</TableCell>
                 <TableCell><StatusIndicator status={agent.status} /></TableCell>
-                <TableCell>{agent.trustScore}/100</TableCell>
+                <TableCell>{formatTrustScore(agent.declaredTrustScore)}</TableCell>
                 <TableCell>
                   <Box display="flex" gap={1}>
                     <Button size="small" variant="outlined" color="warning" startIcon={<BlockIcon />} onClick={() => openRevoke(agent)}>

@@ -26,7 +26,10 @@
  * @property {number} capability - Task-specific capability score from agent registry (Phase 1.1) [0.0-1.0]
  * @property {number} currentLoad - Current workload from cluster service [0.0-1.0]
  * @property {number} maxLoad - Maximum load capacity from cluster service [0.0-1.0]
- * @property {number} trustScore - Anomaly detection trust score from Phase 1.3 [0.0-1.0]
+ * @property {number} declaredTrustScore - DECLARED (operator-set) trust score [0.0-1.0]. NOTE: the routing
+ *   consumer was written against the anomaly-scorer's derived trust score,
+ *   but src/monitoring/anomaly-scorer.js is imported nowhere, so the value
+ *   supplied here is the operator-set field. See src/governance/registry.js.
  * @property {number} dataClearance - Data sensitivity level agent is cleared for [0.0-1.0]
  * @property {number} blastRadiusEstimate - Estimated blast radius if compromised [0.0-1.0]
  */
@@ -145,7 +148,7 @@ function computeBlastRadiusInverse(blastRadiusEstimate) {
  * 
  * @example
  * const score = computeHeuristic(
- *   { agentId: 'agent-1', capability: 0.9, currentLoad: 0.3, maxLoad: 1.0, trustScore: 0.85, dataClearance: 0.8, blastRadiusEstimate: 0.2 },
+ *   { agentId: 'agent-1', capability: 0.9, currentLoad: 0.3, maxLoad: 1.0, declaredTrustScore: 0.85, dataClearance: 0.8, blastRadiusEstimate: 0.2 },
  *   { taskId: 'task-1', requiredDataSensitivity: 0.7, preferredCapabilities: [], minTrustScore: 0.3, blastRadiusTolerance: 0.5 },
  *   DEFAULT_WEIGHTS
  * );
@@ -164,7 +167,7 @@ function computeHeuristic(inputs, taskRequirements, weights = DEFAULT_WEIGHTS) {
   validateWeights(weights);
   
   // Validate required numeric input fields (skip agentId which is a string)
-  const numericFields = ['capability', 'currentLoad', 'maxLoad', 'trustScore', 'dataClearance', 'blastRadiusEstimate'];
+  const numericFields = ['capability', 'currentLoad', 'maxLoad', 'declaredTrustScore', 'dataClearance', 'blastRadiusEstimate'];
   for (const field of numericFields) {
     if (typeof inputs[field] !== 'number' || isNaN(inputs[field])) {
       throw new Error(`inputs.${field} must be a valid number, got: ${inputs[field]}`);
@@ -186,7 +189,7 @@ function computeHeuristic(inputs, taskRequirements, weights = DEFAULT_WEIGHTS) {
   const heuristicSum = 
     weights.w1_capability * inputs.capability +
     weights.w2_load_balance * loadBalance +
-    weights.w3_trust_score * inputs.trustScore +
+    weights.w3_trust_score * inputs.declaredTrustScore +
     weights.w4_data_clearance * dataClearanceScore +
     weights.w5_blast_radius_inverse * blastRadiusInverse;
   
@@ -206,7 +209,7 @@ function computeHeuristic(inputs, taskRequirements, weights = DEFAULT_WEIGHTS) {
  * 
  * @example
  * const eligible = isEligible(
- *   { agentId: 'a', capability: 0.9, currentLoad: 0.5, maxLoad: 1.0, trustScore: 0.9, dataClearance: 0.3, blastRadiusEstimate: 0.5 },
+ *   { agentId: 'a', capability: 0.9, currentLoad: 0.5, maxLoad: 1.0, declaredTrustScore: 0.9, dataClearance: 0.3, blastRadiusEstimate: 0.5 },
  *   { taskId: 't', requiredDataSensitivity: 0.7, preferredCapabilities: [], minTrustScore: 0.3, blastRadiusTolerance: 0.8 }
  * );
  * // Returns: false (clearance too low)
@@ -218,7 +221,7 @@ function isEligible(agent, task) {
   }
   
   // Hard filter: trust score must meet minimum
-  if (agent.trustScore < task.minTrustScore) {
+  if (agent.declaredTrustScore < task.minTrustScore) {
     return false;
   }
   
@@ -368,7 +371,7 @@ function runTests() {
       capability: 0.9,
       currentLoad: 0.5,
       maxLoad: 1.0,
-      trustScore: 0.9,
+      declaredTrustScore: 0.9,
       dataClearance: 0.3,
       blastRadiusEstimate: 0.5
     };
@@ -400,11 +403,11 @@ function runTests() {
       capability: 0.8,
       currentLoad: 0.5,
       maxLoad: 1.0,
-      trustScore: 0.5,  // Lower trust
+      declaredTrustScore: 0.5,  // Lower trust
       dataClearance: 0.9,
       blastRadiusEstimate: 0.2
     };
-    const highTrustAgent = { ...baseAgent, agentId: 'b', trustScore: 0.9 };  // Higher trust
+    const highTrustAgent = { ...baseAgent, agentId: 'b', declaredTrustScore: 0.9 };  // Higher trust
     const task = {
       requiredDataSensitivity: 0.5,
       minTrustScore: 0.3,
@@ -426,7 +429,7 @@ function runTests() {
       capability: 0.8,
       currentLoad: 0.8,  // High load
       maxLoad: 1.0,
-      trustScore: 0.8,
+      declaredTrustScore: 0.8,
       dataClearance: 0.9,
       blastRadiusEstimate: 0.2
     };
@@ -452,7 +455,7 @@ function runTests() {
       capability: 0.9,
       currentLoad: 0.5,
       maxLoad: 1.0,
-      trustScore: 0.2,  // Below minTrustScore
+      declaredTrustScore: 0.2,  // Below minTrustScore
       dataClearance: 0.2,  // Below requiredDataSensitivity
       blastRadiusEstimate: 0.9  // Above blastRadiusTolerance
     };
@@ -490,7 +493,7 @@ function runTests() {
       capability: 1.0,
       currentLoad: 0.0,
       maxLoad: 1.0,
-      trustScore: 1.0,
+      declaredTrustScore: 1.0,
       dataClearance: 1.0,
       blastRadiusEstimate: 0.0
     };
@@ -514,7 +517,7 @@ function runTests() {
       capability: 0.8,
       currentLoad: 0.5,
       maxLoad: 1.0,
-      trustScore: 0.8,
+      declaredTrustScore: 0.8,
       dataClearance: 0.9,
       blastRadiusEstimate: 0.9  // High blast radius
     };
@@ -577,7 +580,7 @@ function runTests() {
       capability: 0,
       currentLoad: 0,
       maxLoad: 0,  // Will cause 1 - 0/0 = 1, but capability is 0
-      trustScore: 0,
+      declaredTrustScore: 0,
       dataClearance: 0,
       blastRadiusEstimate: 1  // Will cause 1-1 = 0
     };

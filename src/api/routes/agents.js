@@ -53,7 +53,7 @@ router.get('/', (req, res) => {
     }
     
     // Sort by trust score descending
-    agents.sort((a, b) => b.trustScore - a.trustScore);
+    agents.sort((a, b) => b.declaredTrustScore - a.declaredTrustScore);
     
     // Apply limit if specified
     if (limit) {
@@ -130,7 +130,7 @@ router.get('/agentId/:agentId',
 // SC-HIGH-007: requireAdmin gate — only compliance-admin /
 // compliance-officer may register new agents. Without this, any
 // authenticated user could mint a new agent identity with elevated
-// capabilities (clearance, trustScore) and operate as that identity.
+// capabilities (clearance, declaredTrustScore) and operate as that identity.
 router.post('/',
   agentRateLimit, // M-02: Rate limiting
   requireAdmin,
@@ -187,7 +187,7 @@ router.post('/',
 
 // PUT /api/agents/:id - Update agent
 // SC-HIGH-007: requireAdmin gate — only compliance-admin may change
-// another agent's clearance, trustScore, or capabilities. Without this,
+// another agent's clearance, declaredTrustScore, or capabilities. Without this,
 // any authenticated user could escalate the privilege of any agent
 // (including themselves) by updating its fields.
 router.put('/:id',
@@ -196,7 +196,7 @@ router.put('/:id',
   validate,
   (req, res) => {
     try {
-      const { name, capabilities, clearance, metadata, trustScore } = req.body;
+      const { name, capabilities, clearance, metadata, declaredTrustScore } = req.body;
       
       const agent = Agent.findById(req.params.id);
       if (!agent) {
@@ -209,7 +209,7 @@ router.put('/:id',
       if (capabilities !== undefined) updates.capabilities = capabilities;
       if (clearance !== undefined) updates.clearance = clearance;
       if (metadata !== undefined) updates.metadata = metadata;
-      if (trustScore !== undefined) updates.trustScore = trustScore;
+      if (declaredTrustScore !== undefined) updates.declaredTrustScore = declaredTrustScore;
       
       const updated = Agent.update(req.params.id, updates);
       
@@ -298,7 +298,7 @@ router.post('/:id/heartbeat',
         message: 'Heartbeat recorded',
         agentId: agent.agentId,
         lastSeenAt: agent.lastSeenAt,
-        trustScore: agent.trustScore
+        declaredTrustScore: agent.declaredTrustScore
       });
     } catch (error) {
       console.error('Error recording heartbeat:', error);

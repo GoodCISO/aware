@@ -275,6 +275,18 @@ class PolicyEngine {
 
   /**
    * Pre-authorization check (for UI display)
+   *
+   * This DELEGATES to `evaluate()` rather than reimplementing the decision.
+   * A previous implementation computed its own answer from the risk level
+   * alone (`riskLevel !== 'HIGH' && riskLevel !== 'CRITICAL'`), which made the
+   * preview STRICTLY MORE PERMISSIVE than the decision it previewed: in a
+   * default-deny system, a reader who took the preview for the decision would
+   * believe low-risk tools were allowed when `evaluate()` denies them.
+   *
+   * `evaluate()` has no side effects — it reads the policy store and the tool
+   * catalogue and returns a decision — so delegating is safe for a read-only
+   * preview endpoint and guarantees the two cannot drift apart.
+   *
    * @param {string} agentId - Agent ID
    * @param {string} tool - Tool name
    * @returns {Object} Preview of what decision would be
@@ -283,24 +295,18 @@ class PolicyEngine {
     const policies = this.policyStore.findForTool(agentId, tool);
     const riskLevel = this.toolCatalog.getRiskLevel(tool);
     const toolRequiresApproval = this.toolCatalog.requiresApproval(tool);
-    
-    if (policies.length === 0) {
-      return {
-        wouldBeAllowed: riskLevel !== 'HIGH' && riskLevel !== 'CRITICAL',
-        riskLevel,
-        requiresApproval: toolRequiresApproval,
-        matchingPolicies: [],
-        reason: 'No matching policies'
-      };
-    }
-    
-    const topPolicy = policies[0];
+
+    const result = this.evaluate({ agentId, tool });
+
     return {
-      wouldBeAllowed: topPolicy.action === PolicyAction.ALLOW,
+      // `wouldBeAllowed` is derived from the SAME decision `evaluate()` would
+      // return, so the preview cannot disagree with the enforcement path.
+      wouldBeAllowed: result.decision === Decision.ALLOW,
+      decision: result.decision,
       riskLevel,
-      requiresApproval: toolRequiresApproval,
+      requiresApproval: result.requiresApproval ?? toolRequiresApproval,
       matchingPolicies: policies.map(p => p.policyId),
-      reason: `Top policy: ${topPolicy.policyId} (${topPolicy.action})`
+      reason: result.reason
     };
   }
 

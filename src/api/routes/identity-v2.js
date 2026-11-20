@@ -265,11 +265,11 @@ router.post('/verify', async (req, res) => {
       verified: true,
       agentId: result.agentId,
       agentType: result.agentType,
-      trustScore: result.trustScore,
+      declaredTrustScore: result.declaredTrustScore,
       clearance: result.clearance,
       trustDomain: result.trustDomain,
       capabilities: result.capabilities,
-      blastRadius: result.blastRadius,
+      declaredBlastRadiusEstimate: result.declaredBlastRadiusEstimate,
       sessionId: result.sessionId
     });
     

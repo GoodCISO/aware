@@ -122,11 +122,14 @@ class AttestationService {
         verified: true,
         agentId: claims.agentId,
         agentType: claims.agentType,
-        trustScore: claims.trustScore,
+        declaredTrustScore: claims.declaredTrustScore,
         clearance: claims.clearance,
         trustDomain: claims.trustDomain,
         capabilities: claims.capabilities,
-        blastRadius: claims.blastRadius,
+        declaredBlastRadiusEstimate:
+          claims.declaredBlastRadiusEstimate !== undefined
+            ? claims.declaredBlastRadiusEstimate
+            : claims.blastRadius,
         sessionId: claims.sessionId,
         executionContext: claims.executionContext
       };

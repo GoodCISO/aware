@@ -40,6 +40,8 @@
  * behaving.
  */
 
+import { bandTrustScore } from './trust-score.js';
+
 /** The entity_kind discriminator for an operator row. */
 export const OPERATOR_ENTITY_KIND = 'operator';
 
@@ -85,23 +87,24 @@ export const bandForAnomalyScore = (score) => {
 };
 
 /**
- * The trust band for a 0..100 TRUST score -- the NHI agent gauge's unit.
+ * The trust band for a trust score.
  *
- * The thresholds are the ones AgentIdentityDashboard.js has always used
- * (>80 high, >50 medium, else low), so extracting the gauge into a shared
- * component is a ZERO-VISUAL-CHANGE for the agent screen.
+ * The stored unit is a FRACTION in [0,1] (src/api/models/Agent.js, the JWT
+ * claim, src/data/agents.json). The display thresholds are unchanged
+ * (>80 high, >50 medium, else low) — they are now applied to the PERCENT
+ * scale, which is what they were always meant to mean.
  *
- * @param {number} trustScore trust score in 0..100 (higher = more trusted)
+ * Before this was corrected, the band was computed against the raw stored
+ * value, so a stored 0.85 banded as "low" and rendered as "0.85/100".
+ *
+ * @param {number} trustScore trust score (canonical unit [0,1]; a 0..100
+ *   value is accepted and normalised)
  * @returns {'high'|'medium'|'low'} trust band
  */
 export const trustBandForTrustScore = (trustScore) => {
-  if (trustScore === null || trustScore === undefined || trustScore === '') {
-    return TRUST_BAND_LOW;
-  }
-  const n = Number(trustScore);
-  if (!Number.isFinite(n)) return TRUST_BAND_LOW;
-  if (n > 80) return TRUST_BAND_HIGH;
-  if (n > 50) return TRUST_BAND_MEDIUM;
+  const band = bandTrustScore(trustScore);
+  if (band === 'high') return TRUST_BAND_HIGH;
+  if (band === 'medium') return TRUST_BAND_MEDIUM;
   return TRUST_BAND_LOW;
 };
 

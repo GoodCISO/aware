@@ -5,9 +5,10 @@ import FingerprintIcon from '@mui/icons-material/Fingerprint';
 import StatusIndicator from './StatusIndicator';
 import TrustGauge from './TrustGauge';
 import { trustBandForTrustScore } from '../constants/operators';
+import { formatTrustScore, normaliseTrustScore } from '../constants/trust-score.js';
 
 const AgentIdentityDashboard = ({ agents = [] }) => {
-  const [sortField, setSortField] = useState('trustScore');
+  const [sortField, setSortField] = useState('declaredTrustScore');
   const [sortDir, setSortDir] = useState('desc');
 
   const sortedAgents = [...agents].sort((a, b) => {
@@ -60,10 +61,10 @@ const AgentIdentityDashboard = ({ agents = [] }) => {
                       (success / warning / error) are unchanged, so this is
                       a ZERO-VISUAL-CHANGE for the agent screen. */}
                   <TrustGauge
-                    value={agent.trustScore}
-                    band={trustBandForTrustScore(agent.trustScore)}
+                    value={normaliseTrustScore(agent.declaredTrustScore) * 100}
+                    band={trustBandForTrustScore(agent.declaredTrustScore)}
                     entityKind="agent"
-                    label={`Trust Score: ${agent.trustScore}/100`}
+                    label={`Trust Score: ${formatTrustScore(agent.declaredTrustScore)}`}
                   />
                 </TableCell>
                 <TableCell>

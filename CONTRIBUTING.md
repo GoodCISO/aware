@@ -84,7 +84,7 @@ git push
 **Commit message prefix convention** (matches existing history):
 
 - `aware:` — code change (src/, config/, scripts/, training/)
-- `docs:` — documentation only (README, redacted-internal-doc, docs/, sop/)
+- `docs:` — documentation only (README, CHANGELOG.md, docs/)
 - `test:` — test-only change
 - `chore:` — tooling / dependency bumps / .gitignore
 
@@ -253,7 +253,7 @@ review can replace:
 2. **Bring-up test (Phase 5 "fresh VM in <30 min"):** `./scripts/aware-up` on a clean Ubuntu 22.04 VM, see [README.md](README.md#quickstart-v2).
 3. **Coverage gate (BRINGUP_FULL=1):** the bring-up's smoke 8i enforces ≥80% lines. Run `BRINGUP_FULL=1 ./scripts/bring-up-coordinator.sh` before tagging a release.
 
-The repo's `redacted-internal-doc` records every phase closure with the commit hash.
+The repo's [CHANGELOG.md](CHANGELOG.md) records every release closure with the commit hash.
 The `redacted-host-config/sops/` mirror is the canonical SOP store for the
 operator's runtime.
 
@@ -296,10 +296,9 @@ code review. If you want to add a formatter, propose it as an ADR first.
 ## Further reading
 
 - [README.md](README.md) — operator onboarding, architecture overview, what AWARE is
-- [redacted-internal-doc](redacted-internal-doc) — closure status of every phase, with commit hashes
-- [docs/adr/ADR (internal).md](docs/adr/ADR (internal).md) — the v2 master architecture decision
+- [CHANGELOG.md](CHANGELOG.md) — closure status of every release, with commit hashes
+- [docs/adr/](docs/adr/) — the architecture decision records
 - [docs/config.md](docs/config.md) — full config reference (auto-generated from `src/config/index.cjs`)
-- [internal SOPs/](internal SOPs/) — Standard Operating Procedures per phase
-- [docs/adr/](docs/adr/) — full ADR index (ADR (internal) through ADR (internal))
-- [CHANGELOG.md](CHANGELOG.md) — version history
-- [docs/EVOLUTION-BRIEF.md](docs/EVOLUTION-BRIEF.md) — v1 background (the bio-inspired routing layer)
+- [docs/security/threat-model.md](docs/security/threat-model.md) — the threat model and the enforcement surfaces
+- [docs/rlm.md](docs/rlm.md) — the recursive language model configuration
+- [docs/compliance-matrix.md](docs/compliance-matrix.md) — the generated component-to-control crosswalk

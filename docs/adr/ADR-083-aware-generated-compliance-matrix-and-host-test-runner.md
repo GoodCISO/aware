@@ -81,14 +81,25 @@ The document carries a "GENERATED FILE — do not edit by hand" banner and a reg
 
 ### 2.3 Ship one script that runs the suite correctly on a developer host
 
-`scripts/aware-test-run.sh` (`npm run test:host`) sets up the environment the suite needs and then runs it. It does exactly four things:
+`scripts/aware-test-run.sh` (`npm run test:host`) sets up the environment the suite needs and then runs it. It does exactly five things:
 
 1. Puts a venv holding `jsonschema` and `pyyaml` first on `PATH`. The venv path comes from `AWARE_TEST_VENV` and defaults to a per-user path, so the script contains **no host-path literal** — `scripts/check-public-boundary.mjs` flags `/Users/<name>/` in scripts, and this script ships to the public mirror.
 2. Points `AWARE_RL_PIPELINE_PATH` at the vendored `backend/heavy-think/src/index.js`, and creates the sibling `rl-pipeline` path as a symlink to that directory.
 3. Puts a per-user gitleaks install on `PATH` when one exists.
-4. Passes `--test-force-exit` to `node --test`.
+4. Links `src/ui/node_modules` from the primary checkout when it is absent.
+5. Passes `--test-force-exit` to `node --test`.
 
-Point 4 is a **workaround, not a fix**. The gateway test's own assertions are correct and all pass; the file leaks a socket at teardown. The proper fix is to close the upstream in that test. Until then `--test-force-exit` is the honest way to run it: it makes the runner exit once the assertions are done rather than waiting for an event loop that will never drain. We do not delete the test, and we do not weaken its assertions.
+Point 4 is a **setup gap, not a workaround**. The UI's dependencies are a
+separate install from the root one — the root `package.json` has a `ui-install`
+script that runs `npm install` in `src/ui`. The UI palette and typography
+guards load the REAL theme through `test/unit/helpers/ui-real-theme.js`, which
+resolves `@babel/core` from `src/ui`, and the API severity-seam test loads
+`react` from the same tree. Those guards are what stop a hand-copied palette
+from passing, so they must run; without the tree they fail with "Cannot find
+module" and read as product defects. If the tree cannot be found at all, the
+script says so loudly rather than letting the failures pass as product bugs.
+
+Point 5 is a **workaround, not a fix**. The gateway test's own assertions are correct and all pass; the file leaks a socket at teardown. The proper fix is to close the upstream in that test. Until then `--test-force-exit` is the honest way to run it: it makes the runner exit once the assertions are done rather than waiting for an event loop that will never drain. We do not delete the test, and we do not weaken its assertions.
 
 The script runs the **tracked** unit tests only. Untracked test files in a dirty working tree belong to other in-flight work, and several fail for missing modules; including them would make the suite's result depend on who has been working in the tree.
 

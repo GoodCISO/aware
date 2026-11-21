@@ -103,7 +103,34 @@ if [[ ! -e "$RL_PIPELINE_SIBLING/src/index.js" && -d "$VENDORED_RL_PIPELINE" ]];
   ln -sfn "$VENDORED_RL_PIPELINE" "$RL_PIPELINE_SIBLING/src" 2>/dev/null || true
 fi
 
-# 3. Force exit so the leaking gateway test cannot hang the run (note 3).
+# 4. `src/ui/node_modules` is a SEPARATE install from the root one.
+#
+# The root package.json has a `ui-install` script that runs `npm install` in
+# `src/ui`, so the UI's own dependencies (react, @babel/core and the rest)
+# live in a separate node_modules tree. The UI palette and typography guards
+# load the REAL theme through `test/unit/helpers/ui-real-theme.js`, which
+# resolves @babel/core from `src/ui`. Without that tree the guards fail with
+# "@babel/core is not resolvable" and the API severity-seam test fails with
+# "Cannot find module .../src/ui/node_modules/react".
+#
+# Those guards are the ones that stop a hand-copied palette from passing, so
+# they must RUN. If `src/ui/node_modules` is absent, the run links it from the
+# primary checkout when one is available. If it cannot, the script says so
+# loudly instead of letting the failures look like product defects.
+UI_NODE_MODULES="$REPO_ROOT/src/ui/node_modules"
+if [[ ! -d "$UI_NODE_MODULES" ]]; then
+  PRIMARY_CHECKOUT="${AWARE_PRIMARY_CHECKOUT:-$HOME/src/AWARE}"
+  if [[ -d "$PRIMARY_CHECKOUT/src/ui/node_modules" ]]; then
+    ln -sfn "$PRIMARY_CHECKOUT/src/ui/node_modules" "$UI_NODE_MODULES" 2>/dev/null || true
+  fi
+fi
+if [[ ! -d "$UI_NODE_MODULES" ]]; then
+  echo "aware-test-run: src/ui/node_modules is absent." >&2
+  echo "  The UI palette guards and the API severity-seam test need it." >&2
+  echo "  Run 'npm run ui-install' in the repository root first." >&2
+fi
+
+# 5. Force exit so the leaking gateway test cannot hang the run (note 3).
 NODE_TEST_FLAGS=(--test-force-exit)
 
 if [[ $# -gt 0 ]]; then

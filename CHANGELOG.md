@@ -2,6 +2,32 @@
 
 All notable changes to AWARE Evolution are documented here.
 
+## [Unreleased] — README and compliance-matrix accuracy
+
+**Release type:** patch. Documentation correctness plus the tooling that keeps it correct. No runtime behaviour changes.
+
+### Fixed
+
+- **The README's "What's new" section still described v2.11.0** while the tree was at v2.12.x. It now summarises v2.11.0 through v2.12.3 from `CHANGELOG.md`, and every claim in it is a capability the source actually has.
+- **The README linked to five documents that do not exist.** `docs/compliance-matrix.md`, `docs/dev/architecture.md`, `docs/EVOLUTION-BRIEF.md`, `docs/sop/` and `redacted-internal-doc` were never tracked in git (`git log --all --diff-filter=D` returns nothing for them), so every one of those links was dead in the published package. They now point at documents that ship: `CHANGELOG.md`, `AGENTS.md`, `docs/adr/`, `docs/security/threat-model.md`, `docs/config.md`, `docs/rlm.md`, and the generated compliance matrix. A link checker over the README now reports zero broken links.
+- **The README and `CONTRIBUTING.md` both documented `npm run coverage` and `npm run coverage:summary`, but neither script existed.** `npm run coverage` failed with `Missing script: "coverage"`. Both scripts are now in `package.json` and do what the documentation says.
+
+### Added
+
+- **`scripts/generate-compliance-matrix.js`** — generates `docs/compliance-matrix.md` from `FrameworkMapper.generateComplianceMatrix()`, so the document the README points at is generated from the same source of truth as the code and cannot drift from it. `--check` exits 1 on drift, for CI.
+- **`docs/compliance-matrix.md`** — the generated component-to-control crosswalk: 8 frameworks across 14 AWARE components. This file has no manual edits; regenerate it with `npm run compliance:matrix`.
+- **`scripts/aware-test-run.sh`** (`npm run test:host`) — runs the unit suite the way it must be run on a developer host. It exists because three environment facts made `npm test` unreliable, and each was measured:
+  1. `python3` on the host has no `jsonschema` / `yaml`, so `test/unit/config/rlm.test.js` failed 34 draft-07 schema assertions. The script puts a venv holding those modules first on `PATH`.
+  2. The `rl-pipeline` sibling repository is absent from the host. The bridge accepts `heavy_think` as an alias for `rl_pipeline`, and `backend/heavy-think/src/index.js` exports `heavy_think`, so the script points `AWARE_RL_PIPELINE_PATH` at the vendored copy and links the sibling path the two `buildDefaultRouter` tests build from their own location. This fixes 16 assertions with no product-code change.
+  3. `test/unit/gateway/server.test.js` leaks a keep-alive socket: all 22 assertions pass, but `server.close()` never completes, so the runner waits for the event loop to drain and eventually reports the file as cancelled. The script passes `--test-force-exit`. The proper fix belongs in the test file; the script works around it until then.
+- **`gitleaks` is required to run the pre-push hook.** When it is absent the hook prints a warning and SKIPS the secret scan, so a planted leak passes the filter and `test/unit/scripts/pre-push-filter.test.js` fails. `scripts/aware-test-run.sh` puts a per-user gitleaks install on `PATH` when one is present.
+
+### Notes
+
+- With the environment fixes above, the unit suite on a clean checkout of this branch is **901 tests, 901 passing, 0 failing** (up from 60 failures on the same tree before the fixes). The 60 were all environmental, not code defects.
+- `scripts/aware-test-run.sh` runs the **tracked** unit tests only. Untracked test files in a dirty working tree belong to other in-flight work and several fail for missing modules.
+- `package.json` gains `coverage`, `coverage:summary`, `compliance:matrix`, `compliance:matrix:check` and `test:host`.
+
 ## [2.12.3] — 2026-11-12 — A revoked agent can be reinstated; `registry.verify()` compares correctly
 
 **Release type:** patch. Two runtime defects in agent lifecycle and credential verification are fixed. Both were found by a source audit of the decision-chain, identity and revocation controls, cross-checked against the deployed stack on 2026-11-12. One is live-reachable today; one is latent.

@@ -408,3 +408,78 @@ test('framework-mapper: no paragraph is claimed without a real evidence componen
     }
   }
 });
+
+// ---------------------------------------------------------------------------
+// The human-readable document must agree with the code
+// ---------------------------------------------------------------------------
+//
+// A per-framework doc that drifts from the catalogue is a second source of
+// truth, and the README points at it. These assertions compare the
+// document's table against the code directly, so an edit to one without the
+// other fails the build.
+
+test('boe-pra-fca-ai-cyber-doc: the per-paragraph table matches the catalogue', () => {
+  const docPath = path.join(
+    __dirname, '..', '..', '..', 'docs', 'compliance', 'boe-pra-fca-ai-cyber.md'
+  );
+  const doc = fs.readFileSync(docPath, 'utf8');
+
+  for (const pid of BOE_PRA_FCA_AI_CYBER_CONTROL_IDS) {
+    const entry = BOE_PRA_FCA_AI_CYBER_CONTROLS[pid];
+
+    // The row must exist and carry the code's awareness value.
+    const rowRe = new RegExp(
+      `^\\| ${pid.replace('.', '\\.')} \\|.*\\| ${entry.awareness} \\|`,
+      'm'
+    );
+    assert.match(
+      doc,
+      rowRe,
+      `${pid}: the document table must show awareness "${entry.awareness}"`
+    );
+
+    // Every awareComponent named in the code must appear in the row.
+    const row = doc.split('\n').find((l) => l.startsWith(`| ${pid} |`));
+    assert.ok(row, `${pid}: no row in the document table`);
+    for (const comp of entry.awareComponents) {
+      assert.ok(
+        row.includes('`' + comp + '`'),
+        `${pid}: the document row must name the component "${comp}"`
+      );
+    }
+  }
+});
+
+test('boe-pra-fca-ai-cyber-doc: the document states the source is unverified', () => {
+  const docPath = path.join(
+    __dirname, '..', '..', '..', 'docs', 'compliance', 'boe-pra-fca-ai-cyber.md'
+  );
+  const doc = fs.readFileSync(docPath, 'utf8');
+
+  assert.match(doc, /UNVERIFIED/,
+    'the document must carry the UNVERIFIED source status');
+  assert.match(doc, /not retrievable|NOT RETRIEVED/i,
+    'the document must say the paper was not retrievable');
+  assert.match(doc, /non-binding/i,
+    'the document must state the source is non-binding guidance');
+  assert.match(doc, /does not assert regulatory compliance|does NOT assert regulatory compliance/i,
+    'the document must disclaim a regulatory-compliance claim');
+});
+
+test('boe-pra-fca-ai-cyber-doc: the document quotes no regulator text', () => {
+  // The catalogue carries regulatorText: null for every entry. The document
+  // must not contain a quoted sentence attributed to the paper, so this test
+  // asserts there is no block quote in the document at all.
+  const docPath = path.join(
+    __dirname, '..', '..', '..', 'docs', 'compliance', 'boe-pra-fca-ai-cyber.md'
+  );
+  const doc = fs.readFileSync(docPath, 'utf8');
+
+  const blockQuotes = doc.split('\n').filter((l) => l.startsWith('> '));
+  assert.deepStrictEqual(
+    blockQuotes,
+    [],
+    `the document must not contain quoted regulator text; found ${blockQuotes.length} block quote line(s)`
+  );
+});
+

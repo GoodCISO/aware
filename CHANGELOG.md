@@ -27,6 +27,61 @@ All notable changes to AWARE Evolution are documented here.
 - With the environment fixes above, the unit suite on a clean checkout of this branch is **901 tests, 901 passing, 0 failing** (up from 60 failures on the same tree before the fixes). The 60 were all environmental, not code defects.
 - `scripts/aware-test-run.sh` runs the **tracked** unit tests only. Untracked test files in a dirty working tree belong to other in-flight work and several fail for missing modules.
 - `package.json` gains `coverage`, `coverage:summary`, `compliance:matrix`, `compliance:matrix:check` and `test:host`.
+## [Unreleased] — PRA / FCA / BoE AI cyber-risk catalogue (source unverified)
+
+**The upstream paper was not retrievable, so this catalogue quotes no regulator text.**
+See ADR-084 §1 for every avenue tried. Every entry carries `regulatorText: null`
+and `sourceStatus: 'UNVERIFIED'`. The ground rule for this workstream is to quote
+regulator text exactly; a catalogue paraphrasing paragraphs nobody read would be a
+plausible-looking artefact rather than evidence. The `awareness` values describe
+AWARE's own control surface, which is measurable in this repository. What is
+unproven is which paragraph each control answers.
+
+### Added
+
+- **`src/compliance/boe-pra-fca-ai-cyber-catalog.js`** — the ninth AWARE
+  compliance framework. Twelve paragraph entries (2.3, 4.2, 4.4, 6.6, 7.5, 8.2,
+  8.5, 9.1, 10.2, 10.4, 10.5, 11.1), frozen, each carrying `{ name, description,
+  awareness, awareComponents, crosswalkConfidence, paragraph, paragraphTheme,
+  regulatorText, sourceStatus, sourceUrl, sourceVerifiedAt }`. The awareness
+  breakdown (6 mapped / 6 partial / 0 gap) is computed from the catalogue, so
+  the framework block and the catalogue cannot disagree.
+- **`src/compliance/boe-pra-fca-ai-cyber-evidence.js`** — one collector per
+  paragraph against the existing `EvidenceCollector`. Each reads a real
+  subsystem and returns `verified: false` with a reason when the subsystem is
+  not reachable, per the convention the 2026-11-10 collector rewrite
+  established. Also exports `buildSecondLineReport()`, which emits one row per
+  paragraph with its evidence status, the source status and the caveat
+  repeated on the row.
+- **`docs/compliance/boe-pra-fca-ai-cyber.md`** — the human-readable per-framework
+  document, matching the `docs/compliance/` pattern.
+- **`test/unit/compliance/boe-pra-fca-ai-cyber-catalog.test.js`** — 23 tests:
+  the twelve IDs and their order, the entry shape, the awareness breakdown and
+  the exact membership of each class, that the catalogue is frozen, the
+  framework-block shape, `getFrameworkControls()` enumeration, that every
+  `awareComponents` reference resolves, that every component mapping resolves
+  via `componentCoversControl`, that the catalogue remains marked `UNVERIFIED`,
+  and that the human-readable document agrees with the code.
+- **ADR-084** — the decision record, including the pin discipline: a verified
+  paper is a NEW catalogue file and a NEW AWARE release, not an in-place edit.
+
+### Changed
+
+- `src/compliance/framework-mapper.js` — registers `BOE_PRA_FCA_AI_CYBER` with
+  the ISO/IEC 42001 block shape, plus `sourceVerified` and `sourceCaveat` so a
+  consumer cannot render these controls as verified evidence.
+- `src/compliance/evidence-collector.js` — registers the twelve collectors and
+  re-exports `buildSecondLineReport`.
+- `README.md` — the compliance-frameworks count is nine, and the new framework
+  carries its row with the source caveat stated in the table itself.
+- `docs/compliance-matrix.md` — regenerated; it is a generated file and now
+  lists nine frameworks.
+
+### What this does not do
+
+It does not evidence conformance to the paper. The paper has never been read.
+It asserts no regulatory compliance and claims no certification. The paper is
+non-binding supervisory guidance.
 
 ## [2.12.3] — 2026-11-12 — A revoked agent can be reinstated; `registry.verify()` compares correctly
 

@@ -5,12 +5,13 @@
 
 This document is the human-readable expansion of the crosswalk held in `src/compliance/framework-mapper.js`. That module is the source of truth: the tables below are generated from it, so they cannot drift from the code.
 
-AWARE maps **8** compliance frameworks across **14** AWARE components.
+AWARE maps **9** compliance frameworks across **14** AWARE components.
 
 ## Frameworks
 
 | ID | Name | Version | Controls |
 |---|---|---|---|
+| `BOE_PRA_FCA_AI_CYBER` | PRA / FCA / Bank of England — Effective practices: cyber risk and resilience management relating to AI | v1.0-2026-11-21 (UNVERIFIED) | 12 |
 | `CSA_AI_CM` | CSA AI Controls Matrix | v1 | 18 |
 | `DORA` | Digital Operational Resilience Act | 2022 | 3 |
 | `ISO_27001` | ISO/IEC 27001:2022 | 2022 | 3 |
@@ -28,6 +29,7 @@ Each table lists the control IDs a component maps to, per framework. A component
 
 | Framework | Control IDs |
 |---|---|
+| PRA / FCA / Bank of England — Effective practices: cyber risk and resilience management relating to AI | `2.3`, `4.2`, `9.1` |
 | CSA AI Controls Matrix | `IAM-01`, `GRC-02` |
 | Digital Operational Resilience Act | `Art.12` |
 | ISO/IEC 27001:2022 | `A.9.2`, `A.9.4` |
@@ -40,6 +42,7 @@ Each table lists the control IDs a component maps to, per framework. A component
 
 | Framework | Control IDs |
 |---|---|
+| PRA / FCA / Bank of England — Effective practices: cyber risk and resilience management relating to AI | `8.2`, `10.2`, `10.4` |
 | CSA AI Controls Matrix | `LOG-05`, `MDS-09`, `SEF-06` |
 | Digital Operational Resilience Act | `Art.26`, `Art.27` |
 | ISO/IEC 27001:2022 | `A.12.4` |
@@ -53,6 +56,7 @@ Each table lists the control IDs a component maps to, per framework. A component
 
 | Framework | Control IDs |
 |---|---|
+| PRA / FCA / Bank of England — Effective practices: cyber risk and resilience management relating to AI | `11.1` |
 | CSA AI Controls Matrix | `LOG-03`, `MDS-05` |
 | Digital Operational Resilience Act | `Art.26`, `Art.27` |
 | ISO/IEC 27001:2022 | `A.12.4` |
@@ -65,6 +69,7 @@ Each table lists the control IDs a component maps to, per framework. A component
 
 | Framework | Control IDs |
 |---|---|
+| PRA / FCA / Bank of England — Effective practices: cyber risk and resilience management relating to AI | `2.3`, `4.2`, `8.2`, `8.5`, `10.4`, `10.5`, `11.1` |
 | CSA AI Controls Matrix | `GRC-04`, `A&A-05` |
 | Digital Operational Resilience Act | `Art.12`, `Art.26` |
 | ISO/IEC 27001:2022 | `A.12.4` |
@@ -78,6 +83,7 @@ Each table lists the control IDs a component maps to, per framework. A component
 
 | Framework | Control IDs |
 |---|---|
+| PRA / FCA / Bank of England — Effective practices: cyber risk and resilience management relating to AI | `4.4`, `7.5` |
 | ISO/IEC 42001:2023 — AI Management System | `A.7.4` |
 | OWASP Top 10 for Model Context Protocol | `MCP01` |
 
@@ -85,6 +91,7 @@ Each table lists the control IDs a component maps to, per framework. A component
 
 | Framework | Control IDs |
 |---|---|
+| PRA / FCA / Bank of England — Effective practices: cyber risk and resilience management relating to AI | `9.1` |
 | CSA AI Controls Matrix | `IAM-04`, `IAM-09`, `CEK-21` |
 | Digital Operational Resilience Act | `Art.12` |
 | ISO/IEC 27001:2022 | `A.9.2`, `A.9.4` |
@@ -98,6 +105,7 @@ Each table lists the control IDs a component maps to, per framework. A component
 
 | Framework | Control IDs |
 |---|---|
+| PRA / FCA / Bank of England — Effective practices: cyber risk and resilience management relating to AI | `8.5`, `9.1`, `10.2` |
 | CSA AI Controls Matrix | `SEF-03`, `LOG-13` |
 | Digital Operational Resilience Act | `Art.26` |
 | ISO/IEC 27001:2022 | `A.16.1` |
@@ -110,6 +118,7 @@ Each table lists the control IDs a component maps to, per framework. A component
 
 | Framework | Control IDs |
 |---|---|
+| PRA / FCA / Bank of England — Effective practices: cyber risk and resilience management relating to AI | `6.6` |
 | OWASP Top 10 for Model Context Protocol | `MCP02`, `MCP07` |
 
 ### `pheromone-specialists`
@@ -157,6 +166,7 @@ Each table lists the control IDs a component maps to, per framework. A component
 
 | Framework | Control IDs |
 |---|---|
+| PRA / FCA / Bank of England — Effective practices: cyber risk and resilience management relating to AI | `6.6` |
 | CSA AI Controls Matrix | `IAM-08`, `DSP-05`, `AIS-07` |
 | Digital Operational Resilience Act | `Art.12` |
 | ISO/IEC 27001:2022 | `A.9.4` |
@@ -170,6 +180,7 @@ Each table lists the control IDs a component maps to, per framework. A component
 
 | Framework | Control IDs |
 |---|---|
+| PRA / FCA / Bank of England — Effective practices: cyber risk and resilience management relating to AI | `4.4`, `7.5` |
 | ISO/IEC 42001:2023 — AI Management System | `A.3.3`, `A.4.3`, `A.6.2.6` |
 | OWASP Top 10 for Model Context Protocol | `MCP03`, `MCP06`, `MCP08`, `MCP10` |
 
@@ -177,5 +188,6 @@ Each table lists the control IDs a component maps to, per framework. A component
 
 - `src/compliance/framework-mapper.js` — the source of truth for this table.
 - [`docs/compliance/aicm-v1.md`](compliance/aicm-v1.md) — per-framework coverage detail.
+- [`docs/compliance/boe-pra-fca-ai-cyber.md`](compliance/boe-pra-fca-ai-cyber.md) — per-framework coverage detail.
 - [`docs/compliance/llm-top-10.md`](compliance/llm-top-10.md) — per-framework coverage detail.
 - [`docs/compliance/mcp-top-10.md`](compliance/mcp-top-10.md) — per-framework coverage detail.

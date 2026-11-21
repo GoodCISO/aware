@@ -42,7 +42,7 @@ AWARE implements **T0–T4 constraint levels** — five enforcement tiers every 
 
 ## Compliance Frameworks
 
-AWARE ships with built-in mapping to **eight** AI and security compliance frameworks. The mapper (`src/compliance/framework-mapper.js`) is the source of truth — every AWARE control is registered against the relevant control IDs in each framework.
+AWARE ships with built-in mapping to **nine** AI and security compliance frameworks. The mapper (`src/compliance/framework-mapper.js`) is the source of truth — every AWARE control is registered against the relevant control IDs in each framework.
 
 | Framework | Version | Coverage |
 |---|---|---|
@@ -54,6 +54,7 @@ AWARE ships with built-in mapping to **eight** AI and security compliance framew
 | **OWASP Top 10 for LLM Applications** | 2025 | All ten risks (LLM01 Prompt Injection → LLM10 Unbounded Consumption); rebinding from v1.1 (2023) → 2025 spec per ADR-050 §5 GAP-1 — see `docs/compliance/llm-top-10.md`. Deprecated v1.1 IDs preserved at `OWASP_LLM_TOP_10_v1_1` for traceability. |
 | **OWASP Agentic Skills Top 10** (AST10) | v1.0-2026 | All ten risks (AST01 Malicious Skills → AST10 Cross-Platform Reuse); behaviour-layer threat model that AWARE's hook-based auto-interception sits in front of — see `src/compliance/ast10-catalog.js` (ADR-048) |
 | **OWASP MCP Top 10** | 2025 | Protocol-layer threat model (Model Context Protocol); adjacent to AST10 (behaviour) and LLM Top 10 (model) — see `src/compliance/mcp-top10-catalog.js` (ADR-051) |
+| **PRA / FCA / Bank of England — AI cyber risk** | v1.0-2026-11-21 (source UNVERIFIED) | Twelve paragraph-level expectations on AI cyber risk and resilience. `awareness` tracks mapped/partial/gap against AWARE's own control surface. **The upstream paper was not retrievable, so no regulator text is reproduced and no paragraph subject matter is verified** — see `src/compliance/boe-pra-fca-ai-cyber-catalog.js` (ADR-084). |
 
 Use `src/compliance/framework-mapper.js` as the source of truth for which AWARE controls map to which framework IDs. The companion compliance matrix at `docs/compliance-matrix.md` documents the full mapping in human-readable form.
 

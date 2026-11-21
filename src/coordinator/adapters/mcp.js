@@ -286,6 +286,15 @@ class MCPAdapter {
     this.policyId = opts.policyId || 'mcp-adapter-v1';
     this.policyVersion = opts.policyVersion || '1';
     this.oversizeBytes = OVERSIZE_BYTES;
+    // AC4 (t_0cb12b17): the OWASP MCP Top 10 classifier is wired into the
+    // emit path. Lazy-constructed on first use so a missing/busted
+    // classifier module cannot prevent the adapter from being constructed
+    // (same posture as the audit logger).
+    this._classifier = null;
+    this._classifierLoadFailed = false;
+    // Escape hatch for tests that must observe the source event WITHOUT
+    // annotations being written.
+    this.enableClassifierWrites = opts.enableClassifierWrites !== false;
   }
 
   /**
@@ -430,6 +439,54 @@ class MCPAdapter {
   }
 
   /**
+   * Run the OWASP MCP Top 10 classifier over an emitted decision record.
+   *
+   * AC4 of t_0cb12b17: every `mcp_message` source event must feed through
+   * `classifyAndLog` so the MCP01..MCP10 annotations actually reach the
+   * audit chain. Without this the classifier was dead code — the module
+   * existed and was fully tested, but nothing ever called it.
+   *
+   * Fail-open, like every other path in this adapter: the classifier MUST
+   * never be able to fail an `mcp_message` emit. A busted classifier
+   * (missing module, a rule that throws) degrades to "no annotations",
+   * never to a thrown error.
+   *
+   * @param {Object} record - the DecisionRecord just built for the event.
+   * @returns {Promise<Object[]>} the annotations written (empty on any
+   *   failure). Never throws.
+   */
+  async _classifyAndAnnotate(record) {
+    let classifier = this._classifier;
+    if (!classifier) {
+      try {
+        // eslint-disable-next-line global-require
+        const mod = require('../../compliance/mcp-top10-classifier');
+        classifier = mod.createMCP10Classifier({
+          auditLogger: this.auditLogger,
+          enableWrites: this.enableClassifierWrites,
+        });
+        this._classifier = classifier;
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.error(`[mcp-adapter] failed to load MCP10 classifier: ${err.code || err.message}`);
+        this._classifier = null;
+        this._classifierLoadFailed = true;
+        return [];
+      }
+    }
+
+    try {
+      // eslint-disable-next-line global-require
+      const mod = require('../../compliance/mcp-top10-classifier');
+      return await mod.classifyAndLog(classifier, record);
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error(`[mcp-adapter] MCP10 classification failed: ${err.code || err.message}`);
+      return [];
+    }
+  }
+
+  /**
    * Parse + emit. Fail-open per ADR-040:
    *   - parse error → log to stderr + emit `mcp_message_parse_error` source event
    *   - emit error  → log to stderr, swallow (NEVER throw)
@@ -456,6 +513,13 @@ class MCPAdapter {
 
     try {
       await logger.logDecision(record);
+      // AC4: every emitted mcp_message feeds the MCP Top 10 classifier so
+      // its annotations reach the audit chain. Runs AFTER the source event
+      // is written (the annotations chain under the source decision id),
+      // and is fail-open — a classifier failure never fails the emit.
+      if (kind === 'mcp_message') {
+        await this._classifyAndAnnotate(record);
+      }
       return { record, ok: true };
     } catch (err) {
       // eslint-disable-next-line no-console

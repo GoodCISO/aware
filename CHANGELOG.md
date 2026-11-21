@@ -122,6 +122,7 @@ Note on vocabulary: the publication-granularity ladder is `P-0/P-1/P-2` and the 
 `L-A/L-B/L-C` — two distinct axes that must not be conflated. Records also carry
 `publication.granularityLegacy` mapping `P-0→L-0`, `P-1→L-1`, matching the names the
 implementation cards use.
+
 ## [2.12.3] — 2026-11-12 — A revoked agent can be reinstated; `registry.verify()` compares correctly
 
 **Release type:** patch. Two runtime defects in agent lifecycle and credential verification are fixed. Both were found by a source audit of the decision-chain, identity and revocation controls, cross-checked against the deployed stack on 2026-11-12. One is live-reachable today; one is latent.
@@ -340,6 +341,7 @@ d8c470a docs(adr)+catalog: add ADR-055 + reconcile A.2.4/A.7.4/A.9.3
 ### Naming history
 
 Prior marketing materials used "Adaptive Workflow Agent with Recursive Evolution" — a real acronym from earlier iterations of the product. Canonical expansion since v2.8.0 is "Autonomous Compliance Infrastructure for AI Agents". Full historical context: see `NAMING.md` (S354, commit `a5c7bfd`).
+
 
 ## [2.10.0] — 2026-07-21 — OWASP AST10 support (ADR-048)
 

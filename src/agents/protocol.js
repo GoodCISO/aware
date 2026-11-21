@@ -233,7 +233,9 @@ class AgentProtocol {
       timestamp: Date.now(),
       reason,
       initiator,
-      blastRadius: this.calculateBlastRadius()
+      // A severity LABEL, not a computed radius. Named to say so; see
+      // `calculateBlastRadius()` for the deferral note.
+      protocolBlastRadiusSeverity: this.calculateBlastRadius()
     };
     
     return this.signAndBroadcast(message);
@@ -344,6 +346,17 @@ class AgentProtocol {
   }
 
   // Calculate blast radius for revocation
+  //
+  // DEFERRED — this is a placeholder, not a computation. It returns a
+  // constant severity label, so it is a DECLARED quantity with no producer.
+  // The name says so, and the value is deliberately not a number: a numeric
+  // radius here would be indistinguishable from the real radius-shaped
+  // quantity (`emergencyImpactEstimate`) or from the numeric estimates.
+  //
+  // When a real implementation lands it must return an object of the
+  // emergency-impact shape, and this method should be renamed
+  // `estimateEmergencyImpact` to match. See src/governance/registry.js
+  // (`protocolBlastRadiusSeverity`).
   calculateBlastRadius() {
     // Simplified blast radius calculation
     // In production, this would analyze active tasks, connections, etc.

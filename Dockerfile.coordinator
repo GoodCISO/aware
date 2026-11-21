@@ -88,6 +88,13 @@ COPY src/db ./src/db
 COPY src/budget ./src/budget
 COPY src/trainer ./src/trainer
 COPY src/audit ./src/audit
+# scripts/chain-depth-census.js is the read-only decisionChainDepth
+# population census (ADR-080): it streams /data/audit/decision-chain.jsonl
+# and prints a JSON report to stdout. Copying it into the image keeps the
+# census runnable from the container via `docker exec aware-2-coordinator
+# node /app/scripts/chain-depth-census.js` without a bind mount. Only this
+# one file is copied — the rest of scripts/ is host-side tooling.
+COPY scripts/chain-depth-census.js ./scripts/chain-depth-census.js
 # t_cc0b54c2 / APTS-MR-019: src/coordinator/index.js eagerly imports
 # credential-classifier (APTS-MR-019 re-export at line 317) at module
 # load time. ESM `export { ... } from` evaluates the imported module

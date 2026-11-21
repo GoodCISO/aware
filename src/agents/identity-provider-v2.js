@@ -141,8 +141,26 @@ class IdentityProviderV2 {
       capabilities: this._normalizeCapabilities(agent.capabilities),
       
       // Trust scoring (from ADR (internal))
-      trustScore: agent.trustScore,
-      blastRadius: agent.metadata.blastRadius || 0.1,
+      declaredTrustScore: agent.declaredTrustScore,
+      // Operator-declared blast-radius ESTIMATE.
+      //
+      // This is NOT a computed radius. It is read from agent metadata with a
+      // hardcoded fallback, and no writer for `metadata.blastRadius` was
+      // found in the identity or registry code — so the fallback is the
+      // effective value in normal operation.
+      //
+      // The claim is named `declaredBlastRadiusEstimate` rather than
+      // `blastRadius` because four different mechanisms previously answered
+      // to the name "blast radius" with four incompatible representations:
+      //
+      //   declaredBlastRadiusEstimate  a supplied fraction in [0,1]  (this)
+      //   revocationTrailPenalty        a computed erosion factor   [0,1]
+      //   emergencyImpactEstimate       a computed impact record    (object)
+      //   protocolBlastRadiusSeverity   a legacy severity label    (string)
+      //
+      // A consumer could not tell which it held. The distinct names make the
+      // distinction checkable. See src/governance/registry.js.
+      declaredBlastRadiusEstimate: agent.metadata.blastRadius || 0.1,
       
       // Session binding (ADR (internal))
       sessionId: session.sessionId,
@@ -225,7 +243,13 @@ class IdentityProviderV2 {
         valid: true,
         sessionId: decoded.sessionId,
         agentId: decoded.agentId,
-        trustScore: decoded.trustScore,
+        // Back-compat: tokens issued before the rename carry `trustScore`.
+        // Prefer the new claim, fall back to the legacy one so in-flight
+        // tokens keep verifying across the rename.
+        declaredTrustScore:
+          decoded.declaredTrustScore !== undefined
+            ? decoded.declaredTrustScore
+            : decoded.trustScore,
         clearance: decoded.clearance,
         trustDomain: decoded.trustDomain,
         executionContext: decoded.executionContext,
@@ -364,7 +388,7 @@ class IdentityProviderV2 {
     const result = {
       verified: true,
       agentId: verification.agentId,
-      trustScore: verification.trustScore,
+      declaredTrustScore: verification.declaredTrustScore,
       clearance: verification.clearance,
       trustDomain: verification.trustDomain,
       capabilities: verification.capabilities

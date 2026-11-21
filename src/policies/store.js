@@ -140,6 +140,22 @@ class PolicyStore {
     this.backupTimer = setInterval(() => {
       this._backup();
     }, this.config.backupIntervalMs);
+
+    // unref(): a periodic file-backup timer must not keep the process alive.
+    // Without this, any process that constructs a PolicyEngine (including
+    // every unit test) holds the event loop open until the timer is
+    // explicitly cleared, so the process never exits on its own.
+    //
+    // The timer still fires normally while the process is alive for other
+    // reasons. unref only removes it from the set of handles that keep the
+    // loop running.
+    //
+    // Found while adding the extension contract test: the suite reported
+    // "Promise resolution is still pending but the event loop has already
+    // resolved" and ran for 139 seconds.
+    if (this.backupTimer && typeof this.backupTimer.unref === 'function') {
+      this.backupTimer.unref();
+    }
   }
 
   /**

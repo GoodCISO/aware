@@ -70,10 +70,10 @@ class KillSwitchIssuer extends EventEmitter {
     }
 
     // Estimate blast radius (informational)
-    let blastRadius = null;
+    let emergencyImpactEstimate = null;
     if (this.blastRadiusEstimator) {
       try {
-        blastRadius = await this.blastRadiusEstimator.estimate(target);
+        emergencyImpactEstimate = await this.blastRadiusEstimator.estimate(target);
       } catch (error) {
         console.warn('[ISSUER] Failed to estimate blast radius:', error.message);
       }
@@ -106,10 +106,10 @@ class KillSwitchIssuer extends EventEmitter {
     this.issuedKillSignals.set(killSignalId, entry);
 
     // Emit pre-issuance event for blast radius warning if needed
-    if (blastRadius && blastRadius.businessImpact === 'CRITICAL') {
+    if (emergencyImpactEstimate && emergencyImpactEstimate.businessImpact === 'CRITICAL') {
       this.emit('criticalBlastRadius', {
         killSignalId,
-        blastRadius,
+        emergencyImpactEstimate,
         severity,
       });
     }
@@ -132,14 +132,14 @@ class KillSwitchIssuer extends EventEmitter {
       severity,
       target: entry.target,
       issuedBy,
-      blastRadius,
+      emergencyImpactEstimate,
     });
 
     return {
       success: true,
       killSignalId,
       entry,
-      blastRadius,
+      emergencyImpactEstimate,
     };
   }
 

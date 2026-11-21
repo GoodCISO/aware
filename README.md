@@ -42,7 +42,7 @@ AWARE implements **T0–T4 constraint levels** — five enforcement tiers every 
 
 ## Compliance Frameworks
 
-AWARE ships with built-in mapping to **eight** AI and security compliance frameworks. The mapper (`src/compliance/framework-mapper.js`) is the source of truth — every AWARE control is registered against the relevant control IDs in each framework.
+AWARE ships with built-in mapping to **nine** AI and security compliance frameworks. The mapper (`src/compliance/framework-mapper.js`) is the source of truth — every AWARE control is registered against the relevant control IDs in each framework.
 
 | Framework | Version | Coverage |
 |---|---|---|
@@ -54,16 +54,20 @@ AWARE ships with built-in mapping to **eight** AI and security compliance framew
 | **OWASP Top 10 for LLM Applications** | 2025 | All ten risks (LLM01 Prompt Injection → LLM10 Unbounded Consumption); rebinding from v1.1 (2023) → 2025 spec per ADR-050 §5 GAP-1 — see `docs/compliance/llm-top-10.md`. Deprecated v1.1 IDs preserved at `OWASP_LLM_TOP_10_v1_1` for traceability. |
 | **OWASP Agentic Skills Top 10** (AST10) | v1.0-2026 | All ten risks (AST01 Malicious Skills → AST10 Cross-Platform Reuse); behaviour-layer threat model that AWARE's hook-based auto-interception sits in front of — see `src/compliance/ast10-catalog.js` (ADR-048) |
 | **OWASP MCP Top 10** | 2025 | Protocol-layer threat model (Model Context Protocol); adjacent to AST10 (behaviour) and LLM Top 10 (model) — see `src/compliance/mcp-top10-catalog.js` (ADR-051) |
+| **PRA / FCA / Bank of England — AI cyber risk** | v1.0-2026-11-21 (source UNVERIFIED) | Twelve paragraph-level expectations on AI cyber risk and resilience. `awareness` tracks mapped/partial/gap against AWARE's own control surface. **The upstream paper was not retrievable, so no regulator text is reproduced and no paragraph subject matter is verified** — see `src/compliance/boe-pra-fca-ai-cyber-catalog.js` (ADR-084). |
 
 Use `src/compliance/framework-mapper.js` as the source of truth for which AWARE controls map to which framework IDs. The companion compliance matrix at `docs/compliance-matrix.md` documents the full mapping in human-readable form.
 
-### What's new in v2.11.0
+### What's new in v2.12.x
 
-- **Rebrand:** `aware` → `@goodciso/aware` (npm scope); `alvinchang/aware` → `GoodCISO/aware` (GitHub). Source code unchanged.
-- **Three new framework catalogs** added to `framework-mapper.js`: OWASP LLM Top 10:2025 (ADR-050), OWASP MCP Top 10 (ADR-051), ISO/IEC 42001 (ADR-055).
-- **AST10 coverage gap closed** (carry-over from v2.10.0) — see ADR-048.
-- **Vaara shadow audit adapter merged** (pluggable audit transport; commit `d69ac27`).
-- **OSS hygiene:** License cleanup (commit `ebc2b0d`) fixes a latent Apache-2.0 / GPL-3.0 header conflict on `github/main`; tarball down to **452.1 kB** from 88.3 MB pre-cleanup.
+- **Rebrand** (v2.11.0) — the package is published as `@goodciso/aware` and the repository is `GoodCISO/aware`.
+- **MCP Top 10 classifier shipped** (v2.12.0) — `src/compliance/mcp-top10-classifier.js` classifies MCP tool traffic against the OWASP MCP Top 10 with confidence ratings and evidence capture. A coverage test fails if any of the ten classes becomes unreachable. Three further rules (MCP06 unprovenanced context write, MCP07 unpinned plugin install, MCP08 unbound audience credential) completed the 10/10 coverage in v2.12.1.
+- **Durable compliance state** (v2.12.0) — `src/compliance/persistence.js` persists assessments and collected evidence so the compliance dashboard no longer reads 0/0 after a restart.
+- **Publish guard** (v2.12.1) — `scripts/publish-guard.mjs` packs from a clean detached worktree at the release tag and refuses to publish if any packed file is absent from the tag or differs from it byte-for-byte.
+- **README capability claims corrected** (v2.12.2) — four claims in this file described behaviour the source did not have.
+- **Agent lifecycle fixes** (v2.12.3) — a revoked agent can now be reinstated (`REVOKED -> ACTIVE`), and `registry.verify()` compares a credential against the stored hash instead of the raw value.
+
+See [CHANGELOG.md](CHANGELOG.md) for the full per-release detail.
 
 ---
 
@@ -264,15 +268,14 @@ AWARE/
 
 ## Quick Links
 
-- **Status:** [redacted-internal-doc](redacted-internal-doc) — closure status of every phase
-- **v2 architecture:** [`redacted-internal-doc`](redacted-internal-doc)
+- **Status:** [CHANGELOG.md](CHANGELOG.md) — closure status of every release
+- **v2 architecture:** [AGENTS.md](AGENTS.md) and [`docs/adr/`](docs/adr/) — the operating rules and the architecture decision records
 - **Dev guide:** [CONTRIBUTING.md](CONTRIBUTING.md) — for anyone reading or modifying v2 source
-- **Dev deep dive:** [docs/dev/architecture.md](docs/dev/architecture.md) — pipeline, data flow, trainer lifecycle
-- **v1 evolution brief:** [docs/EVOLUTION-BRIEF.md](docs/EVOLUTION-BRIEF.md)
-- **SOPs:** [docs/sop/](docs/sop/) — per-phase operator procedures
-- **SOP mirror:** `redacted-host-config/sops/` (canonical SOP store)
+- **Dev deep dive:** [docs/security/threat-model.md](docs/security/threat-model.md) — the threat model and the enforcement surfaces
+- **Configuration reference:** [docs/config.md](docs/config.md) — every runtime env var
+- **RLM reference:** [docs/rlm.md](docs/rlm.md) — the recursive language model configuration
 - **Changelog:** [CHANGELOG.md](CHANGELOG.md)
-- **Compliance matrix (v1):** [docs/compliance-matrix.md](docs/compliance-matrix.md)
+- **Compliance matrix:** [docs/compliance-matrix.md](docs/compliance-matrix.md) — the generated component-to-control crosswalk
 
 ---
 

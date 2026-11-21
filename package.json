@@ -1,6 +1,6 @@
 {
   "name": "@goodciso/aware",
-  "version": "2.12.2",
+  "version": "2.12.3",
   "description": "AWARE - Autonomous Compliance Infrastructure for AI Agents",
   "repository": {
     "type": "git",
@@ -11,6 +11,8 @@
     "url": "https://github.com/GoodCISO/aware/issues"
   },
   "files": [
+    "AGENTS.md",
+    "CONTRIBUTING.md",
     "src/agents/",
     "src/api/",
     "src/audit/",
@@ -42,6 +44,7 @@
     "docs/adr/",
     "docs/compliance/",
     "docs/security/",
+    "docs/compliance-matrix.md",
     "docs/config.md",
     "docs/openapi.yaml",
     "docs/rlm.md",
@@ -68,6 +71,11 @@
     "test:jest": "jest",
     "test:watch": "node --test --watch 'test/unit/**/*.test.js'",
     "lint": "eslint src/",
+    "coverage": "c8 --reporter=text --reporter=lcov --reporter=html npm test",
+    "coverage:summary": "c8 --reporter=lcov --reporter=text npm test && node scripts/coverage-summary.mjs",
+    "compliance:matrix": "node scripts/generate-compliance-matrix.js",
+    "compliance:matrix:check": "node scripts/generate-compliance-matrix.js --check",
+    "test:host": "bash scripts/aware-test-run.sh",
     "ui-dev": "cd src/ui && npm start",
     "ui-build": "cd src/ui && npm run build",
     "ui-install": "cd src/ui && npm install",

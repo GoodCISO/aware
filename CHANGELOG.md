@@ -2,6 +2,121 @@
 
 All notable changes to AWARE Evolution are documented here.
 
+## [Unreleased] — README and compliance-matrix accuracy
+
+**Release type:** patch. Documentation correctness plus the tooling that keeps it correct. No runtime behaviour changes.
+
+### Fixed
+
+- **The README's "What's new" section still described v2.11.0** while the tree was at v2.12.x. It now summarises v2.11.0 through v2.12.3 from `CHANGELOG.md`, and every claim in it is a capability the source actually has.
+- **The README linked to five documents that do not exist.** `docs/compliance-matrix.md`, `docs/dev/architecture.md`, `docs/EVOLUTION-BRIEF.md`, `docs/sop/` and `redacted-internal-doc` were never tracked in git (`git log --all --diff-filter=D` returns nothing for them), so every one of those links was dead in the published package. They now point at documents that ship: `CHANGELOG.md`, `AGENTS.md`, `docs/adr/`, `docs/security/threat-model.md`, `docs/config.md`, `docs/rlm.md`, and the generated compliance matrix. A link checker over the README now reports zero broken links.
+- **The README and `CONTRIBUTING.md` both documented `npm run coverage` and `npm run coverage:summary`, but neither script existed.** `npm run coverage` failed with `Missing script: "coverage"`. Both scripts are now in `package.json` and do what the documentation says.
+
+### Added
+
+- **`scripts/generate-compliance-matrix.js`** — generates `docs/compliance-matrix.md` from `FrameworkMapper.generateComplianceMatrix()`, so the document the README points at is generated from the same source of truth as the code and cannot drift from it. `--check` exits 1 on drift, for CI.
+- **`docs/compliance-matrix.md`** — the generated component-to-control crosswalk: 8 frameworks across 14 AWARE components. This file has no manual edits; regenerate it with `npm run compliance:matrix`.
+- **`scripts/aware-test-run.sh`** (`npm run test:host`) — runs the unit suite the way it must be run on a developer host. It exists because three environment facts made `npm test` unreliable, and each was measured:
+  1. `python3` on the host has no `jsonschema` / `yaml`, so `test/unit/config/rlm.test.js` failed 34 draft-07 schema assertions. The script puts a venv holding those modules first on `PATH`.
+  2. The `rl-pipeline` sibling repository is absent from the host. The bridge accepts `heavy_think` as an alias for `rl_pipeline`, and `backend/heavy-think/src/index.js` exports `heavy_think`, so the script points `AWARE_RL_PIPELINE_PATH` at the vendored copy and links the sibling path the two `buildDefaultRouter` tests build from their own location. This fixes 16 assertions with no product-code change.
+  3. `test/unit/gateway/server.test.js` leaks a keep-alive socket: all 22 assertions pass, but `server.close()` never completes, so the runner waits for the event loop to drain and eventually reports the file as cancelled. The script passes `--test-force-exit`. The proper fix belongs in the test file; the script works around it until then.
+- **`gitleaks` is required to run the pre-push hook.** When it is absent the hook prints a warning and SKIPS the secret scan, so a planted leak passes the filter and `test/unit/scripts/pre-push-filter.test.js` fails. `scripts/aware-test-run.sh` puts a per-user gitleaks install on `PATH` when one is present.
+
+### Notes
+
+- With the environment fixes above, the unit suite on a clean checkout of this branch is **901 tests, 901 passing, 0 failing** (up from 60 failures on the same tree before the fixes). The 60 were all environmental, not code defects.
+- `scripts/aware-test-run.sh` runs the **tracked** unit tests only. Untracked test files in a dirty working tree belong to other in-flight work and several fail for missing modules.
+- `package.json` gains `coverage`, `coverage:summary`, `compliance:matrix`, `compliance:matrix:check` and `test:host`.
+## [Unreleased] — PRA / FCA / BoE AI cyber-risk catalogue (source unverified)
+
+**The upstream paper was not retrievable, so this catalogue quotes no regulator text.**
+See ADR-084 §1 for every avenue tried. Every entry carries `regulatorText: null`
+and `sourceStatus: 'UNVERIFIED'`. The ground rule for this workstream is to quote
+regulator text exactly; a catalogue paraphrasing paragraphs nobody read would be a
+plausible-looking artefact rather than evidence. The `awareness` values describe
+AWARE's own control surface, which is measurable in this repository. What is
+unproven is which paragraph each control answers.
+
+### Added
+
+- **`src/compliance/boe-pra-fca-ai-cyber-catalog.js`** — the ninth AWARE
+  compliance framework. Twelve paragraph entries (2.3, 4.2, 4.4, 6.6, 7.5, 8.2,
+  8.5, 9.1, 10.2, 10.4, 10.5, 11.1), frozen, each carrying `{ name, description,
+  awareness, awareComponents, crosswalkConfidence, paragraph, paragraphTheme,
+  regulatorText, sourceStatus, sourceUrl, sourceVerifiedAt }`. The awareness
+  breakdown (6 mapped / 6 partial / 0 gap) is computed from the catalogue, so
+  the framework block and the catalogue cannot disagree.
+- **`src/compliance/boe-pra-fca-ai-cyber-evidence.js`** — one collector per
+  paragraph against the existing `EvidenceCollector`. Each reads a real
+  subsystem and returns `verified: false` with a reason when the subsystem is
+  not reachable, per the convention the 2026-11-10 collector rewrite
+  established. Also exports `buildSecondLineReport()`, which emits one row per
+  paragraph with its evidence status, the source status and the caveat
+  repeated on the row.
+- **`docs/compliance/boe-pra-fca-ai-cyber.md`** — the human-readable per-framework
+  document, matching the `docs/compliance/` pattern.
+- **`test/unit/compliance/boe-pra-fca-ai-cyber-catalog.test.js`** — 23 tests:
+  the twelve IDs and their order, the entry shape, the awareness breakdown and
+  the exact membership of each class, that the catalogue is frozen, the
+  framework-block shape, `getFrameworkControls()` enumeration, that every
+  `awareComponents` reference resolves, that every component mapping resolves
+  via `componentCoversControl`, that the catalogue remains marked `UNVERIFIED`,
+  and that the human-readable document agrees with the code.
+- **ADR-084** — the decision record, including the pin discipline: a verified
+  paper is a NEW catalogue file and a NEW AWARE release, not an in-place edit.
+
+### Changed
+
+- `src/compliance/framework-mapper.js` — registers `BOE_PRA_FCA_AI_CYBER` with
+  the ISO/IEC 42001 block shape, plus `sourceVerified` and `sourceCaveat` so a
+  consumer cannot render these controls as verified evidence.
+- `src/compliance/evidence-collector.js` — registers the twelve collectors and
+  re-exports `buildSecondLineReport`.
+- `README.md` — the compliance-frameworks count is nine, and the new framework
+  carries its row with the source caveat stated in the table itself.
+- `docs/compliance-matrix.md` — regenerated; it is a generated file and now
+  lists nine frameworks.
+
+### What this does not do
+
+It does not evidence conformance to the paper. The paper has never been read.
+It asserts no regulatory compliance and claims no certification. The paper is
+non-binding supervisory guidance.
+
+## [2.12.3] — 2026-11-12 — A revoked agent can be reinstated; `registry.verify()` compares correctly
+
+**Release type:** patch. Two runtime defects in agent lifecycle and credential verification are fixed. Both were found by a source audit of the decision-chain, identity and revocation controls, cross-checked against the deployed stack on 2026-11-12. One is live-reachable today; one is latent.
+
+### Fixed
+
+- **A revoked agent could never be reinstated.** `Agent.transitionTo()` (`src/api/models/Agent.js:140-160`) defined `REVOKED` as admitting only `DECOMMISSIONED`, with no path back to `ACTIVE`. Both reinstate paths call `transitionTo(AgentState.ACTIVE)`: `src/agents/registry.js:186` and `src/agents/revocation-cache.js:161`. The revocation-cache path is the live one, reached by `POST /api/identity-v2/:agentId/reinstate` (`src/api/routes/identity-v2.js:379`); the thrown `Invalid state transition from revoked to active` escapes to the route's catch-all and returns HTTP 500. The registry path wraps the call in `try/catch` and degrades to `{ success: false, error }` — a silent failure. Revocation was therefore a one-way door: a revoked agent — including one revoked by a false positive — could never return to service. `REVOKED` now admits `ACTIVE` as well, matching the `SUSPENDED` row, which already permitted `-> ACTIVE`. `DECOMMISSIONED` remains terminal. Reinstatement remains an audited event (`AGENT_REINSTATED`), and the revocation-cache entry and blast-radius penalty are cleared as before (`src/agents/revocation-cache.js:168,171`).
+- **`registry.verify()` compared a PBKDF2 hash against a raw credential, so it could never succeed.** `src/agents/registry.js:257` used `agent.credentials.current === credential`, but `credentials.current` holds the *hash*, not the plaintext — `Agent.generateCredential()` stores `hashCredential(rawCredential)` and returns the raw value only for initial provisioning (`src/api/models/Agent.js:103-116`). The comparison therefore evaluated a `salt:hash` string against a raw hex credential and was always false. The correct comparison already existed on the model as `Agent.checkCredential()` (`src/api/models/Agent.js:129-131`), and `src/api/routes/agents.js:454` already used it. The registry now uses the same verifier. **This defect was latent:** the only caller is `src/agents/identity-provider.js:62`, and the v1 identity provider is not instantiated anywhere at runtime — the deployed stack uses `identity-provider-v2.js`, which verifies JWTs and never calls `registry.verify()`. No live request was affected. The defect was that the registry exported a credential-verification function that could not succeed, and that wiring v1 back up would reject every valid credential with `Invalid agent credentials` — indistinguishable from an invalid one.
+
+### Added
+
+- `test/unit/agent-lifecycle.test.js` — 10 regression tests covering the transition table (`REVOKED -> ACTIVE`, `REVOKED -> DECOMMISSIONED`, `DECOMMISSIONED` terminal, `SUSPENDED -> ACTIVE`), `registry.verify()` against correct/incorrect/non-`ACTIVE`/unknown agents, the hash-not-plaintext storage invariant, and a guard that the suite does not leak test agents into the repository's runtime data file. The tests were verified to **fail** against the unfixed code (2 failures) and pass against the fixed code. `test/` is not in the npm `files` whitelist, so the file does not ship in the tarball.
+
+### Notes
+
+- The defect audit that produced these fixes also **confirmed** that the claims corrected in `2.12.2` are correct as published: the README tier ladder, the `src/policies/engine.js` enforcement path, the pheromone-trail wording, and the "cascade is specified, not implemented" statement all match the source. No README change is required in this release.
+- `credentials.previous` is still stored on rotation (`src/api/models/Agent.js:110`) and still never consulted. Credential rotation is a cutover, not an overlap: the previous value stops verifying immediately. A bounded overlap window during rotation remains unbuilt and is not claimed here.
+- The `npm test` baseline is unchanged by this release. The pre-existing `test/unit/` failures and the hang tracked in Gitea issue #2 are present before and after; see the test evidence below.
+
+### Test evidence
+
+- **New suite:** `test/unit/agent-lifecycle.test.js` — 10 tests, 10 pass, 0 fail. Against the unfixed source the same file reports 8 pass / 2 fail, with the two failures being exactly `REVOKED -> ACTIVE is an allowed transition` and `registry.verify accepts the correct raw credential`. The other 8 pass in both runs, which confirms they are not tautological.
+- **Regression baseline.** The `test/unit/` suite was measured twice on an **identical file set and an identical environment**: the same commit (`c5998434`) was checked out twice, and the only difference between the two runs was that the two fixes above were reverted in one of them. The file set is the 56 test files present in the working tree, so the comparison is not skewed by untracked or pre-existing test files.
+
+  | | pass | fail | hanging files |
+  |---|---|---|---|
+  | fixes reverted (baseline) | 751 | 56 | 5 |
+  | fixes applied | 815 | 54 | 5 |
+  | **delta** | **+64** | **−2** | **0** |
+
+  **Zero new failures.** The two failures that disappear are the two new regression tests failing against the reverted code — that is the fix being detected, not a pre-existing defect being masked. The 5 hanging files are identical in both runs: `test/unit/gateway/audit-routes.test.js`, `test/unit/gateway/cors-allowlist.test.js`, `test/unit/gateway/server.test.js` and two others. The 54 remaining failures are pre-existing and unrelated to this change — they sit in the RL pipeline, BLOCK-13 schema guards and coordinator-routing suites, and are already tracked in Gitea issue #2.
+
+  A first comparison against a pristine worktree of `origin/main` was discarded: that worktree had a different file set and a different module-resolution environment, and reported differences that were artefacts of the comparison rather than of this change. The figures above come from the controlled A/B run.
+
 ## [2.12.2] — 2026-11-11 — README capability claims corrected to match the source
 
 **Release type:** patch. Documentation only. No runtime behaviour change for a correctly deployed stack, and no figure or coverage number changed. This release corrects claims that the published `README.md` — which ships in the npm tarball and is served from the public GitHub README — asserted but the source does not support.

@@ -142,7 +142,7 @@ class Agent {
       [AgentState.PENDING]: [AgentState.ACTIVE, AgentState.DECOMMISSIONED],
       [AgentState.ACTIVE]: [AgentState.SUSPENDED, AgentState.REVOKED, AgentState.DECOMMISSIONED],
       [AgentState.SUSPENDED]: [AgentState.ACTIVE, AgentState.REVOKED, AgentState.DECOMMISSIONED],
-      [AgentState.REVOKED]: [AgentState.DECOMMISSIONED],
+      [AgentState.REVOKED]: [AgentState.ACTIVE, AgentState.DECOMMISSIONED],
       [AgentState.DECOMMISSIONED]: []
     };
 

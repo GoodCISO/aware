@@ -11,6 +11,8 @@
     "url": "https://github.com/GoodCISO/aware/issues"
   },
   "files": [
+    "AGENTS.md",
+    "CONTRIBUTING.md",
     "src/agents/",
     "src/api/",
     "src/audit/",
@@ -42,6 +44,7 @@
     "docs/adr/",
     "docs/compliance/",
     "docs/security/",
+    "docs/compliance-matrix.md",
     "docs/config.md",
     "docs/openapi.yaml",
     "docs/rlm.md",

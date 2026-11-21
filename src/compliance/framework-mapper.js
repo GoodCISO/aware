@@ -5,6 +5,12 @@
 const { AICM_V1_DOMAINS, AICM_V1_CONTROL_IDS } = require('./aicm-v1-catalog');
 const { MCP_TOP_10_CONTROLS, MCP_TOP_10_CONTROL_IDS } = require('./mcp-top10-catalog');
 const { ISO_42001_CONTROLS, ISO_42001_CONTROL_IDS } = require('./iso42001-catalog');
+const {
+  BOE_PRA_FCA_AI_CYBER_CONTROLS,
+  BOE_PRA_FCA_AI_CYBER_CONTROL_IDS,
+  BOE_PRA_FCA_AI_CYBER_AWARENESS_BREAKDOWN,
+  BOE_PRA_FCA_AI_CYBER_SOURCE_VERIFIED
+} = require('./boe-pra-fca-ai-cyber-catalog');
 
 /**
  * Compliance Framework Definitions
@@ -213,6 +219,48 @@ const FRAMEWORKS = {
       awarenessBreakdown: { mapped: 13, partial: 19, gap: 6, total: 38 },
       // Per ADR-055 §"Scope statement": Annex A only; no clause 4-10.
       scopeNote: 'Annex A control coverage only; does NOT assert clause 4-10 management-system body coverage; does NOT claim certification.'
+    },
+    // ADR-084 — PRA / FCA / Bank of England, "Effective practices: cyber
+    // risk and resilience management relating to AI" (19 November 2026).
+    //
+    // THE PAPER WAS NOT RETRIEVED when this catalogue was authored
+    // (2026-11-21). The catalogue carries NO verbatim regulator text: every
+    // entry's `regulatorText` is null and every entry's `sourceStatus` is
+    // 'UNVERIFIED'. The entries describe AWARE's OWN control surface, which
+    // is measurable in this repository; what is unproven is WHICH paragraph
+    // each control answers.
+    //
+    // `sourceVerified` and `sourceCaveat` are exposed here so a consumer
+    // (report generator, evidence collector, second-line export) can see
+    // the caveat without reading the catalogue source. A downstream report
+    // that renders these controls MUST surface that caveat.
+    //
+    // The paper is non-binding "effective practices" material. AWARE does
+    // NOT assert regulatory compliance with it and does NOT claim
+    // certification of any kind.
+    BOE_PRA_FCA_AI_CYBER: {
+      id: 'BOE_PRA_FCA_AI_CYBER',
+      name: 'PRA / FCA / Bank of England — Effective practices: cyber risk and resilience management relating to AI',
+      version: 'v1.0-2026-11-21 (UNVERIFIED)',
+      source: 'https://www.bankofengland.co.uk/prudential-regulation/publication/2026/effective-practices-cyber-risk-resilience-management-relating-to-ai',
+      // The paper could not be retrieved; there is no verified fetch date.
+      pinDate: null,
+      license: 'Apache-2.0 (code) / no upstream text reproduced',
+      attribution: 'Paragraph numbers reference a PRA / FCA / Bank of England paper dated 19 November 2026. NO regulator text is reproduced: the upstream document was not retrievable when this catalogue was authored, so every entry carries regulatorText: null.',
+      catalogRef: './boe-pra-fca-ai-cyber-catalog',
+      // Flat 12-paragraph list, in the paper's own numeric order.
+      // Per ADR-084 §D3 each entry carries { name, description, awareness,
+      // awareComponents, crosswalkConfidence, paragraph, paragraphTheme,
+      // regulatorText, sourceStatus, sourceUrl, sourceVerifiedAt }.
+      controls: BOE_PRA_FCA_AI_CYBER_CONTROLS,
+      controlIds: BOE_PRA_FCA_AI_CYBER_CONTROL_IDS,
+      // Computed from the catalogue so the two cannot disagree.
+      awarenessBreakdown: BOE_PRA_FCA_AI_CYBER_AWARENESS_BREAKDOWN,
+      // Per ADR-084 §D4: the source caveat travels with the framework so a
+      // consumer cannot render these controls as verified evidence.
+      sourceVerified: BOE_PRA_FCA_AI_CYBER_SOURCE_VERIFIED,
+      sourceCaveat: 'Upstream paper not retrieved (2026-11-21). Entries carry no verbatim regulator text; paragraph subject matter is an AWARE hypothesis pending verification.',
+      scopeNote: 'Control-surface mapping only. Does NOT assert regulatory compliance, does NOT claim conformity with any supervisory expectation, and does NOT claim certification. Source is NON-BINDING guidance.'
     }
   };
 
@@ -242,7 +290,14 @@ const AWARE_COMPONENT_MAPPINGS = {
     // A.6.2.2 (requirements per agent), A.6.2.5 (deployment state),
     // A.7.2 (data for development), A.9.4 (intended use), A.10.2
     // (responsibility allocation).
-    'ISO_42001': ['A.3.2', 'A.4.2', 'A.4.3', 'A.4.5', 'A.6.2.2', 'A.6.2.5', 'A.7.2', 'A.9.4', 'A.10.2']
+    'ISO_42001': ['A.3.2', 'A.4.2', 'A.4.3', 'A.4.5', 'A.6.2.2', 'A.6.2.5', 'A.7.2', 'A.9.4', 'A.10.2'],
+
+    // ADR-084 §D5: PRA / FCA / BoE AI cyber-risk effective practices.
+    // agent-registry is the evidence source for these paragraphs. The upstream
+    // paper was NOT retrieved (see the catalogue header) — these are
+    // AWARE's own control surfaces, and the paragraph subject matter is a
+    // hypothesis pending verification.
+    'BOE_PRA_FCA_AI_CYBER': ['2.3', '4.2', '9.1']
   },
 
   // Phase 1.2: Per-Agent Sandbox Policies — execution isolation, input validation.
@@ -279,7 +334,14 @@ const AWARE_COMPONENT_MAPPINGS = {
     // ADR-055 §D5 / research §4: behavioral-baseline provides the reference
     // distribution for A.6.2.4 (V&V) and out-of-scope detection for A.9.4
     // (intended use).
-    'ISO_42001': ['A.6.2.4', 'A.9.4']
+    'ISO_42001': ['A.6.2.4', 'A.9.4'],
+
+    // ADR-084 §D5: PRA / FCA / BoE AI cyber-risk effective practices.
+    // behavioral-baseline is the evidence source for these paragraphs. The upstream
+    // paper was NOT retrieved (see the catalogue header) — these are
+    // AWARE's own control surfaces, and the paragraph subject matter is a
+    // hypothesis pending verification.
+    'BOE_PRA_FCA_AI_CYBER': ['11.1']
   },
 
   // Phase 1.4: Kill Switch — emergency termination of misbehaving agents.
@@ -294,7 +356,14 @@ const AWARE_COMPONENT_MAPPINGS = {
     'OWASP_AST10': ['AST06'],
     // ADR-055 §D5 / research §4: kill-switch chain events feed A.6.2.6
     // (operation & monitoring) and A.8.4 (communication of incidents).
-    'ISO_42001': ['A.6.2.6', 'A.8.4']
+    'ISO_42001': ['A.6.2.6', 'A.8.4'],
+
+    // ADR-084 §D5: PRA / FCA / BoE AI cyber-risk effective practices.
+    // kill-switch is the evidence source for these paragraphs. The upstream
+    // paper was NOT retrieved (see the catalogue header) — these are
+    // AWARE's own control surfaces, and the paragraph subject matter is a
+    // hypothesis pending verification.
+    'BOE_PRA_FCA_AI_CYBER': ['8.5', '9.1', '10.2']
   },
 
   // Phase 2.1: Pheromone Specialists — specialised detection heuristics (per Good CISO SimuRA).
@@ -353,7 +422,14 @@ const AWARE_COMPONENT_MAPPINGS = {
     // ADR-055 §D5 / research §4: identity-provider covers A.3.2 (roles)
     // and A.10.3 (suppliers) — publisher-key machinery is the supplier-
     // identity surface for AI components.
-    'ISO_42001': ['A.3.2', 'A.10.3']
+    'ISO_42001': ['A.3.2', 'A.10.3'],
+
+    // ADR-084 §D5: PRA / FCA / BoE AI cyber-risk effective practices.
+    // identity-provider is the evidence source for these paragraphs. The upstream
+    // paper was NOT retrieved (see the catalogue header) — these are
+    // AWARE's own control surfaces, and the paragraph subject matter is a
+    // hypothesis pending verification.
+    'BOE_PRA_FCA_AI_CYBER': ['9.1']
   },
 
   // Phase 3.1B: Behavioural Anomaly Detection — detect anomalous AI agent behaviour.
@@ -378,7 +454,14 @@ const AWARE_COMPONENT_MAPPINGS = {
     // (operation & monitoring), A.6.2.8 (event logs — via chain events;
     // A.6.2.8 is the canonical ISO 42001 mapping and rides the same chain),
     // and A.8.4 (incident communication).
-    'ISO_42001': ['A.3.3', 'A.6.2.4', 'A.6.2.6', 'A.6.2.8', 'A.8.4']
+    'ISO_42001': ['A.3.3', 'A.6.2.4', 'A.6.2.6', 'A.6.2.8', 'A.8.4'],
+
+    // ADR-084 §D5: PRA / FCA / BoE AI cyber-risk effective practices.
+    // anomaly-detection is the evidence source for these paragraphs. The upstream
+    // paper was NOT retrieved (see the catalogue header) — these are
+    // AWARE's own control surfaces, and the paragraph subject matter is a
+    // hypothesis pending verification.
+    'BOE_PRA_FCA_AI_CYBER': ['8.2', '10.2', '10.4']
   },
 
   // Phase 3.1C: Tool Access Control — fine-grained tool invocation control.
@@ -405,7 +488,14 @@ const AWARE_COMPONENT_MAPPINGS = {
     // for A.6.1.3 (design & development processes), A.7.3 (data acquisition
     // allowlist), and A.9.2 (responsible use — runtime RBAC is the
     // enforcement mechanism).
-    'ISO_42001': ['A.6.1.3', 'A.7.3', 'A.9.2']
+    'ISO_42001': ['A.6.1.3', 'A.7.3', 'A.9.2'],
+
+    // ADR-084 §D5: PRA / FCA / BoE AI cyber-risk effective practices.
+    // tool-access-control is the evidence source for these paragraphs. The upstream
+    // paper was NOT retrieved (see the catalogue header) — these are
+    // AWARE's own control surfaces, and the paragraph subject matter is a
+    // hypothesis pending verification.
+    'BOE_PRA_FCA_AI_CYBER': ['6.6']
   },
 
   // Phase 3.x: Tool Observation Proxy — observes model-input classifications
@@ -434,7 +524,14 @@ const AWARE_COMPONENT_MAPPINGS = {
     // (input/output classification) and concerns — A.3.3 (concerns reporting),
     // A.4.3 (data resources — observation events are the access record), and
     // A.6.2.6 (operation & monitoring).
-    'ISO_42001': ['A.3.3', 'A.4.3', 'A.6.2.6']
+    'ISO_42001': ['A.3.3', 'A.4.3', 'A.6.2.6'],
+
+    // ADR-084 §D5: PRA / FCA / BoE AI cyber-risk effective practices.
+    // tool-observation-proxy is the evidence source for these paragraphs. The upstream
+    // paper was NOT retrieved (see the catalogue header) — these are
+    // AWARE's own control surfaces, and the paragraph subject matter is a
+    // hypothesis pending verification.
+    'BOE_PRA_FCA_AI_CYBER': ['4.4', '7.5']
   },
 
   // Phase 3.2: Compliance Mapping — cross-framework mapping + posture reporting.
@@ -461,7 +558,14 @@ const AWARE_COMPONENT_MAPPINGS = {
     // (system documentation), A.8.3 (external reporting), A.8.5 (interested-
     // party information), A.9.3 (responsible-use objectives), and A.10.4
     // (customer-facing commitments).
-    'ISO_42001': ['A.2.2', 'A.2.3', 'A.2.4', 'A.6.1.2', 'A.6.2.3', 'A.6.2.7', 'A.6.2.8', 'A.7.5', 'A.8.2', 'A.8.3', 'A.8.5', 'A.9.3', 'A.10.4']
+    'ISO_42001': ['A.2.2', 'A.2.3', 'A.2.4', 'A.6.1.2', 'A.6.2.3', 'A.6.2.7', 'A.6.2.8', 'A.7.5', 'A.8.2', 'A.8.3', 'A.8.5', 'A.9.3', 'A.10.4'],
+
+    // ADR-084 §D5: PRA / FCA / BoE AI cyber-risk effective practices.
+    // compliance-mapping is the evidence source for these paragraphs. The upstream
+    // paper was NOT retrieved (see the catalogue header) — these are
+    // AWARE's own control surfaces, and the paragraph subject matter is a
+    // hypothesis pending verification.
+    'BOE_PRA_FCA_AI_CYBER': ['2.3', '4.2', '8.2', '8.5', '10.4', '10.5', '11.1']
   },
 
   // ADR-051 §2.2 — AWARE components not yet in the framework-mapper
@@ -485,7 +589,16 @@ const AWARE_COMPONENT_MAPPINGS = {
     // (operation & monitoring). The earlier 'tool-observation-proxy' row
     // (line 424, added in the Phase 3.x block) is overridden by this one
     // in JS, so the ISO_42001 mapping lives here.
-    'ISO_42001': ['A.3.3', 'A.4.3', 'A.6.2.6']
+    'ISO_42001': ['A.3.3', 'A.4.3', 'A.6.2.6'],
+    // ADR-084 §D5: PRA / FCA / BoE AI cyber-risk effective practices.
+    // This is the EFFECTIVE tool-observation-proxy row (the earlier one at
+    // line 514 is overridden by this one in JS, exactly as the ISO_42001
+    // mapping above notes). tool-observation-proxy is the evidence source
+    // for third-party supply-chain scanning (4.4) and data governance
+    // (7.5). The upstream paper was NOT retrieved (see the catalogue
+    // header) — these are AWARE's own control surfaces, and the paragraph
+    // subject matter is a hypothesis pending verification.
+    'BOE_PRA_FCA_AI_CYBER': ['4.4', '7.5']
   },
 
   // Per-call RBAC: src/policies/permission-model.js evaluates
@@ -493,13 +606,20 @@ const AWARE_COMPONENT_MAPPINGS = {
   // MCP02 (scope creep — static enforcement only; drift detection
   // deferred to AWARE 2.2) and MCP07 (per-call authorization).
   'permission-model': {
-    'OWASP_MCP_TOP_10': ['MCP02', 'MCP07']
+    'OWASP_MCP_TOP_10': ['MCP02', 'MCP07'],
     // No 'ISO_42001' key — research §4 does not enumerate a per-component
     // permission-model mapping. Per-call RBAC is captured under
     // tool-access-control's A.9.2 (responsible-use processes) mapping;
     // adding a duplicate row here would inflate the crosswalk without
     // adding evidence. Cross-checked against ADR-055 §D5 (which also does
     // not enumerate permission-model).
+
+    // ADR-084 §D5: PRA / FCA / BoE AI cyber-risk effective practices.
+    // permission-model is the evidence source for these paragraphs. The upstream
+    // paper was NOT retrieved (see the catalogue header) — these are
+    // AWARE's own control surfaces, and the paragraph subject matter is a
+    // hypothesis pending verification.
+    'BOE_PRA_FCA_AI_CYBER': ['6.6']
   },
 
   // Tool-level shadow detection: src/policies/shadow-detector.js flags
@@ -527,7 +647,14 @@ const AWARE_COMPONENT_MAPPINGS = {
     // ADR-055 §D5 / research §4: credential-classifier covers A.7.4
     // (data quality for sensitive content — only the secret/PII quality
     // dimension is wired today).
-    'ISO_42001': ['A.7.4']
+    'ISO_42001': ['A.7.4'],
+
+    // ADR-084 §D5: PRA / FCA / BoE AI cyber-risk effective practices.
+    // credential-classifier is the evidence source for these paragraphs. The upstream
+    // paper was NOT retrieved (see the catalogue header) — these are
+    // AWARE's own control surfaces, and the paragraph subject matter is a
+    // hypothesis pending verification.
+    'BOE_PRA_FCA_AI_CYBER': ['4.4', '7.5']
   }
 };
 
@@ -674,6 +801,33 @@ class FrameworkMapper {
           crosswalkConfidence: ctrl.crosswalkConfidence || null,
           ismsRef: ctrl.ismsRef || null,
           clause: ctrl.clause || null
+        });
+      }
+    }
+
+    // PRA / FCA / BoE — "Effective practices: cyber risk and resilience
+    // management relating to AI". Per ADR-084 §D3 the entry shape is
+    // { name, description, awareness, awareComponents, crosswalkConfidence,
+    // paragraph, paragraphTheme, regulatorText, sourceStatus, sourceUrl,
+    // sourceVerifiedAt }. We expose `sourceStatus` and `sourceVerifiedAt`
+    // so a report consumer can see that the upstream text is unverified
+    // without reading the catalogue source.
+    if (frameworkId === 'BOE_PRA_FCA_AI_CYBER') {
+      for (const [ctrlId, ctrl] of Object.entries(framework.controls || {})) {
+        controls.push({
+          id: ctrlId,
+          category: ctrlId,
+          categoryName: ctrl.name,
+          description: ctrl.description,
+          awareness: ctrl.awareness || null,
+          awareComponents: ctrl.awareComponents || [],
+          crosswalkConfidence: ctrl.crosswalkConfidence || null,
+          paragraph: ctrl.paragraph || null,
+          paragraphTheme: ctrl.paragraphTheme || null,
+          regulatorText: ctrl.regulatorText || null,
+          sourceStatus: ctrl.sourceStatus || null,
+          sourceUrl: ctrl.sourceUrl || null,
+          sourceVerifiedAt: ctrl.sourceVerifiedAt || null
         });
       }
     }

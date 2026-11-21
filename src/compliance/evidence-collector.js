@@ -329,6 +329,14 @@ class EvidenceCollector extends EventEmitter {
       };
     });
 
+    // ADR-084 §D6: PRA / FCA / BoE AI cyber-risk catalogue — one collector
+    // per paragraph, each reading a REAL subsystem. The upstream paper was
+    // NOT retrieved, so these evidence AWARE's own control surface; the
+    // `sourceStatus` caveat travels with every record. See
+    // src/compliance/boe-pra-fca-ai-cyber-evidence.js.
+    const { registerBoePraFcaAiCyberCollectors } = require('./boe-pra-fca-ai-cyber-evidence');
+    registerBoePraFcaAiCyberCollectors(this);
+
     // 2026-11-10 (scribe): give every collector a schedule. Previously
     // registerSchedule() existed and getIntervalMs() existed, but NO
     // schedule was ever registered and nothing ever started a loop — so
@@ -668,5 +676,11 @@ module.exports = {
   EvidenceCollector,
   getEvidenceCollector,
   EvidenceSourceType,
-  EvidenceStatus
+  EvidenceStatus,
+  // ADR-084 §D6: the exportable second-line report builder for the
+  // PRA / FCA / BoE AI cyber-risk catalogue. It lives in its own module
+  // (boe-pra-fca-ai-cyber-evidence.js) to keep this file free of a
+  // dependency on the catalogue, but it is re-exported here so a consumer
+  // that already imports the evidence collector has one entry point.
+  buildSecondLineReport: require('./boe-pra-fca-ai-cyber-evidence').buildSecondLineReport
 };

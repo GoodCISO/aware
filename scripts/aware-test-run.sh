@@ -130,7 +130,47 @@ if [[ ! -d "$UI_NODE_MODULES" ]]; then
   echo "  Run 'npm run ui-install' in the repository root first." >&2
 fi
 
-# 5. Force exit so the leaking gateway test cannot hang the run (note 3).
+# 5. Link the ROOT node_modules when the checkout has none.
+#
+# A git worktree does not carry node_modules — it is gitignored, and the
+# install lives in the primary checkout. Without it every test that requires
+# a runtime dependency fails with "Cannot find module 'express'", which reads
+# as a product defect rather than a missing install.
+#
+# We link the primary checkout's node_modules rather than running a fresh
+# install, so the suite runs against the SAME dependency tree the operator
+# already has. If no primary checkout can be found, the script says so loudly.
+if [[ ! -d "$REPO_ROOT/node_modules" ]]; then
+  PRIMARY_CHECKOUT="${AWARE_PRIMARY_CHECKOUT:-$HOME/src/AWARE}"
+  if [[ -d "$PRIMARY_CHECKOUT/node_modules" ]]; then
+    ln -sfn "$PRIMARY_CHECKOUT/node_modules" "$REPO_ROOT/node_modules" 2>/dev/null || true
+  fi
+fi
+if [[ ! -d "$REPO_ROOT/node_modules" ]]; then
+  echo "aware-test-run: node_modules is absent and no primary checkout was found." >&2
+  echo "  Run 'npm install' in the repository root first." >&2
+fi
+
+# 6. Seed the gitignored runtime data files when they are absent.
+#
+# `src/data/agents.json` and `src/data/users.json` are gitignored (the
+# .gitignore carries them deliberately — runtime agent data must never be
+# committed). A fresh checkout therefore has NO agents.json, and the gateway
+# tests fail with an empty roster rather than with a product defect.
+#
+# The repo already ships the seeder for this: `npm run seed:dev` runs
+# scripts/seed-dev-agents.js and scripts/seed-dev-users.js, whose output is
+# reproducible fixture data (the credential values are SHA-256 of literal
+# agent names, not secrets). We call the agent seeder only when the file is
+# missing, so an existing roster is never overwritten.
+if [[ ! -f "$REPO_ROOT/src/data/agents.json" ]]; then
+  if ! node scripts/seed-dev-agents.js >/dev/null 2>&1; then
+    echo "aware-test-run: could not seed src/data/agents.json" >&2
+    echo "  Run 'npm run seed:dev' in the repository root." >&2
+  fi
+fi
+
+# 7. Force exit so the leaking gateway test cannot hang the run (note 3).
 NODE_TEST_FLAGS=(--test-force-exit)
 
 if [[ $# -gt 0 ]]; then

@@ -86,7 +86,21 @@ test('acs host: permits is false for a deny', async () => {
   const session = sessionWith({ decision: 'DENY', reason: 'blocked' });
   const result = await session.preToolCall({ toolName: 't', args: {} });
   assert.equal(result.permits, false);
+  assert.equal(result.mayExecute, false);
   assert.equal(result.enforced, true);
+});
+
+test('acs host: mayExecute is false in evaluate_only even when the decision permits', async () => {
+  // `permits` reports the DECISION. `mayExecute` reports whether that
+  // decision is BINDING. In evaluate_only the verdict is a shadow record,
+  // so the host must not act on it.
+  const session = sessionWith({ decision: 'ALLOW', reason: 'ok' });
+  session.mode = 'evaluate_only';
+  const result = await session.preToolCall({ toolName: 't', args: {} });
+
+  assert.equal(result.permits, true, 'the decision still permits');
+  assert.equal(result.mayExecute, false, 'but the decision is not binding');
+  assert.equal(result.enforced, false);
 });
 
 test('acs host: permits is true for an allow and for a transform', async () => {

@@ -224,6 +224,28 @@ pass against a conformant runtime. AWARE uses `"$target.body"`. See
 
 ---
 
+## 10a. The adapter against the REAL AWARE policy engine
+
+Every other ACS suite uses a stub policy engine. A stub proves the
+adapter's own logic; it cannot prove the adapter works with the engine it
+actually ships against. `test/unit/acs/real-engine.test.js` closes that
+gap.
+
+| Property | Proven by |
+| --- | --- |
+| The adapter evaluates a real AWARE decision and yields a conformant verdict | `test/unit/acs/real-engine.test.js` — "the adapter evaluates a REAL AWARE policy decision" |
+| The real engine's default deny is preserved, not softened into an allow | same suite — "the real engine default is a DENY, and the adapter preserves it" |
+| Every member the real engine returns passes the normaliser's member check | same suite — "the real decision shape passes the member check" |
+
+This suite exists because the adversarial review found a case the stub
+suites could not: the real engine returns `{decision, reason, policyId,
+riskLevel, requiresApproval}`. When the normaliser was taught to reject
+unknown policy-output members, those AWARE-internal members had to be
+allowed explicitly, or the adapter would have rejected every REAL
+decision while every stub test still passed.
+
+---
+
 ## 11. What is NOT claimed
 
 These are **not** implemented and are **not** claimed:

@@ -73,8 +73,13 @@ const result = await session.preToolCall({
   callId: 'call-1',
 });
 
-if (!result.permits) {
+if (!result.mayExecute) {
   // The host does NOT carry out the action.
+  //
+  // Branch on `mayExecute`, NOT on `permits`. `permits` reports what the
+  // DECISION was; `mayExecute` reports whether that decision is binding.
+  // In `evaluate_only` mode the decision is still computed and recorded,
+  // but it is not a permission, so `mayExecute` is false there.
   console.log(result.verdict.decision, result.verdict.reason);
   return;
 }

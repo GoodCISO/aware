@@ -48,6 +48,7 @@
     "docs/openapi.yaml",
     "docs/rlm.md",
     "LICENSE",
+    "NOTICE.md",
     "README.md",
     "CHANGELOG.md",
     "package.json"

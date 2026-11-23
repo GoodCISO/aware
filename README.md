@@ -57,6 +57,15 @@ AWARE ships with built-in mapping to **eight** AI and security compliance framew
 
 Use `src/compliance/framework-mapper.js` as the source of truth for which AWARE controls map to which framework IDs. The companion compliance matrix at `docs/compliance-matrix.md` documents the full mapping in human-readable form.
 
+### What's new on `feat/acs-support` (unreleased)
+
+- **ACS (Agent Control Specification) support.** AWARE can now act as a conformant ACS policy decision engine and emit ACS receipts into its own evidence trail. Pinned to ACS `v0.4.0-beta.2`; the adapter lives behind `src/acs/` so a spec bump is a contained change. See `docs/acs/README.md` for the quickstart and `docs/acs/CONFORMANCE.md` for the claim-by-claim test coverage.
+  - Accepts the canonical five-member ACS policy input and validates it against the pinned schema.
+  - Enforces `pre_tool_call`, `post_tool_call` and `output`; answers the other five intervention points with a well-formed verdict.
+  - Supports `enforce` and `evaluate_only` modes.
+  - **Fails closed** on every error path, with a registered `runtime_error:*` reason — the guard for the issue-#83 class, where a gate silently stopped firing and allowed what it should have denied.
+  - Emits a payload-free ACS receipt per evaluation into the existing hash-chained decision log, linked to the execution outcome.
+
 ### What's new in v2.11.0
 
 - **Rebrand:** `aware` → `@goodciso/aware` (npm scope); `alvinchang/aware` → `GoodCISO/aware` (GitHub). Source code unchanged.

@@ -246,23 +246,70 @@ decision while every stub test still passed.
 
 ---
 
+## 10b. Policy interoperability (Phase 3)
+
+| Property | Proven by |
+| --- | --- |
+| The exported manifest validates against the PINNED manifest schema | `test/unit/acs/manifest.test.js` — "the exported manifest validates against the PINNED manifest schema" |
+| The exported manifest passes the adapter rules | same suite |
+| AWARE binds through the `custom` policy branch and its own adapter name | same suite — "the exported manifest binds AWARE through the custom adapter" |
+| The exported manifest binds the three enforced intervention points | same suite |
+| The exported manifest survives a YAML round trip unchanged | same suite — "the exported manifest renders as YAML and reparses to the same value" |
+| The upstream `acs-email-tool` manifest parses | same suite — "the upstream acs-email-tool manifest parses" |
+| A manifest naming an unknown adapter is REFUSED | same suite |
+| A manifest binding an undefined policy is REFUSED | same suite |
+| A manifest with a disallowed path root is REFUSED | same suite |
+| A manifest with an unsupported spec version is REFUSED | same suite |
+| A child manifest merges over a parent | same suite — "a child manifest merges over a parent" |
+| A conflicting intervention point is a MERGE CONFLICT | same suite — "a conflicting intervention point is a MERGE CONFLICT" |
+| A local `extends` chain resolves | same suite — "a local extends chain resolves" |
+| An UNPINNED remote parent is REFUSED | same suite |
+| A remote parent with no fetcher is REFUSED | same suite |
+| An unreadable local parent is REFUSED | same suite |
+| An `extends` chain deeper than the limit is REFUSED | same suite |
+| **ROUND TRIP: AWARE → manifest → AWARE gives IDENTICAL verdicts on the corpus** | same suite — "ROUND TRIP: AWARE -> manifest -> AWARE gives IDENTICAL verdicts on the corpus" |
+| The bridge REFUSES a manifest binding an unenforced point | same suite |
+| The bridge FAILS CLOSED when the manifest target does not resolve | same suite |
+| The manifest routes work over real HTTP | `test/unit/acs/http-manifest.test.js` |
+
+**The round-trip corpus.** A round trip over one case proves nothing, so
+the corpus covers six cases: `allow`, `deny`, `audit`, `no_policy`,
+`transform`, and `deny` with an approval requirement. Each is evaluated
+directly and then through the exported-and-reimported manifest, and the
+decision and the reason must match.
+
+**The YAML subset.** `src/acs/yaml.js` refuses anchors, aliases, tags, block
+scalars, multi-document streams and tab indentation. A parser that guesses
+at those can change the meaning of a policy document, so guessing is not an
+option. JSON is a subset of YAML and loads unchanged.
+
+---
+
 ## 11. What is NOT claimed
 
 These are **not** implemented and are **not** claimed:
 
-1. **ACS manifest import**, including `extends` chains. Phase 3.
-2. **Exporting AWARE policies as ACS manifests.** Phase 3.
-3. **Evaluating Rego or Cedar policy bundles.** The adapter is a decision
+1. **Evaluating Rego or Cedar policy bundles.** The adapter is a decision
    engine over AWARE's existing policy engine, not a policy language
-   implementation. OPA is optional and is Phase 3.
-4. **The round-trip test** (AWARE → ACS manifest → AWARE → identical
-   verdicts). It depends on 1 and 2.
-5. **The incremental stream profile** (ACS section 18.1).
-6. **A non-null identity provider.**
-7. **A durable approval store.** The default is in-memory; the audit trail
+   implementation. A manifest may DECLARE a rego or cedar policy, and the
+   adapter refuses such a manifest, because it cannot evaluate it. OPA
+   stays optional and this is deferred.
+2. **Fetching a remote `extends` parent over the network.** The resolution
+   path accepts a pinned remote parent through an injected fetcher, and it
+   REFUSES an unpinned one. The adapter does not ship a network client for
+   this, so a host must supply the fetcher.
+3. **The incremental stream profile** (ACS section 18.1).
+4. **A non-null identity provider.**
+5. **A durable approval store.** The default is in-memory; the audit trail
    is durable regardless.
+6. **A CI job.** The repository has no `.github/workflows` directory; its CI
+   surface is the gitea pipeline, which this branch does not touch.
+7. **Interoperation with a live Microsoft Foundry or AGT deployment.** The
+   conformance claim is against the pinned specification schemas and the
+   upstream reference example, not against a running hosted service.
 8. **Defined precedence** between ACS manifest policies and AWARE's own
-   per-agent policies.
+   per-agent policies. The manifest selects and configures AWARE's policy
+   engine; it does not add a second evaluator.
 
 ---
 

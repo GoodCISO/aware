@@ -28,9 +28,9 @@ conformance job, not a redesign.
 | Transform (`$target`-rooted) | Supported |
 | Human approval seam (request, resolution, echo rule) | Supported |
 | Receipts into the AWARE hash chain | Supported |
-| ACS manifest import (`extends` chains) | **Not yet** — Phase 3 |
-| Export AWARE policies as ACS manifests | **Not yet** — Phase 3 |
-| Rego / OPA policy bundles | **Not yet, and optional** — Phase 3 |
+| ACS manifest import (`extends` chains) | Supported |
+| Export AWARE policies as ACS manifests | Supported |
+| Rego / OPA policy bundles | **Not supported, and optional** |
 
 ---
 
@@ -153,14 +153,14 @@ than shipping its own copy. It is vendored, with its commit pinned.
 
 ## Known gaps
 
-1. **ACS manifests are not imported yet.** The adapter consumes a policy
-   input, not a manifest. Manifest import, `extends` chains and manifest
-   export are Phase 3. Today AWARE's own policy store remains the policy
-   source.
-2. **Rego and Cedar are not evaluated by the adapter.** The adapter is a
-   decision engine over AWARE's existing policy engine, not a policy
-   language implementation. Rego evaluation through OPA is Phase 3 and is
-   **optional**: a user who does not use Rego does not need OPA.
+1. **Rego and Cedar are not evaluated.** A manifest may declare a rego or
+   cedar policy, and the adapter REFUSES such a manifest, because it cannot
+   evaluate it. AWARE binds through the `custom` policy branch. OPA stays
+   optional: a user who does not use Rego does not need OPA.
+2. **A remote `extends` parent is not fetched over the network.** The
+   resolution path accepts a pinned remote parent through an injected
+   fetcher, and refuses an unpinned one. The adapter ships no network
+   client for this.
 3. **The identity provider is null.** The receipt schema requires the
    identities to be null when the provider is null, so AWARE declares a
    null provider. AWARE's own crypto identity provider

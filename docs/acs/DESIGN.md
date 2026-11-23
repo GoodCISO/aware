@@ -384,12 +384,43 @@ enforced. The other five return a well-formed verdict and are recorded.
 - [x] wired into the existing hash chain via `logDecision`
 - [x] the receipt links to the outcome through `parentDecisionId`
 
-### Phase 3 — Policy interoperability — NOT STARTED
+### Phase 3 — Policy interoperability — DONE, except Rego
 
-- [ ] import ACS manifests (`extends` chains) into AWARE
-- [ ] export AWARE policies as ACS manifests
-- [ ] round-trip test: AWARE → ACS manifest → AWARE → identical verdicts
-- [ ] Rego / OPA, optional and gated
+- [x] import ACS manifests (`extends` chains) into AWARE — `src/acs/manifest.js`
+- [x] export AWARE policies as ACS manifests — `exportManifest`
+- [x] round-trip test: AWARE → ACS manifest → AWARE → identical verdicts — `test/unit/acs/manifest.test.js`
+- [ ] Rego / OPA, optional and gated — DEFERRED
+
+**How AWARE plugs into a manifest.** The ACS `policy` definition has four
+branches: rego, test, cedar and `custom`. The `custom` branch requires an
+`adapter` name, and AWARE exports and imports `{type: custom, adapter:
+"aware"}`. A manifest naming a DIFFERENT adapter is REFUSED, not ignored:
+binding a manifest to the wrong engine is exactly the silent mismatch that
+produces a wrong verdict.
+
+**The `extends` chain.** ACS SPEC section 2.2 requires a repeated binding
+for the same intervention point to be structurally identical, and the loader
+does not union dependency lists. A difference is a merge conflict and the
+resolution FAILS. A remote parent must carry a sha256 or an integrity pin;
+an UNPINNED remote parent is refused, because fetching it would mean
+trusting an unverifiable document.
+
+**The manifest is wiring, not an evaluator.** Importing a manifest selects
+and configures AWARE's policy engine; it does not replace it. The
+`PolicyBridge` builds the canonical five-member policy input using the
+manifest's `policy_target` path and evaluates it.
+
+**A conflict fails closed.** A manifest that binds an intervention point
+AWARE does not enforce is a conflict, not a licence to allow: the manifest
+says "apply policy here" and AWARE says "I hold no policy for here", so the
+evaluation denies with `runtime_error:intervention_point_unknown`.
+
+**YAML.** AWARE has no YAML dependency, and the task says not to add a
+heavy one. `src/acs/yaml.js` is a strict SUBSET parser and renderer that
+REFUSES anchors, aliases, tags, block scalars, multi-document streams and
+tab indentation rather than guessing at them, because a parser that guesses
+can change the meaning of a policy document. JSON is a subset of YAML and
+loads unchanged.
 
 ### Phase 4 — Conformance and tests — PARTLY DONE
 

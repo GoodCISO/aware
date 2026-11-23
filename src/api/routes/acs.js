@@ -29,6 +29,9 @@ const {
   ApprovalSeam,
   buildPolicyInput,
   getReservedReasons,
+  validateManifest,
+  exportManifest,
+  toYaml,
   ACS_SPEC_VERSION,
   ACS_RELEASE_TAG,
   ACS_COMMIT,
@@ -229,6 +232,64 @@ router.get('/spec', (req, res) => {
     enforcement_modes: ENFORCEMENT_MODES,
     reserved_reasons: Array.from(getReservedReasons()),
   });
+});
+
+/**
+ * POST /api/acs/manifest/validate
+ * Validate a manifest against the pinned schema and the adapter rules.
+ */
+router.post('/manifest/validate', (req, res) => {
+  try {
+    const body = req.body || {};
+    const manifest = body.manifest || body;
+    const result = validateManifest(manifest);
+    if (!result.ok) {
+      return res.status(400).json({
+        valid: false,
+        errors: result.errors,
+      });
+    }
+    return res.json({ valid: true, errors: [] });
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.error(`[acs] manifest validation fault: ${err.message}`);
+    return res.status(500).json({
+      valid: false,
+      errors: [{ path: '$', message: 'The manifest could not be validated.' }],
+    });
+  }
+});
+
+/**
+ * POST /api/acs/manifest/export
+ * Export AWARE's policy binding as an ACS manifest.
+ */
+router.post('/manifest/export', (req, res) => {
+  try {
+    const body = req.body || {};
+    const manifest = exportManifest({
+      name: body.name,
+      version: body.version,
+      interventionPoints: body.intervention_points,
+      policyId: body.policy_id,
+    });
+    const result = validateManifest(manifest);
+    if (!result.ok) {
+      return res.status(500).json({
+        error: 'ACS_EXPORT_INVALID',
+        errors: result.errors,
+      });
+    }
+    return res.json({
+      manifest,
+      yaml: toYaml(manifest),
+      spec_version: ACS_SPEC_VERSION,
+    });
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.error(`[acs] manifest export fault: ${err.message}`);
+    return res.status(500).json({ error: 'ACS_EXPORT_FAILED' });
+  }
 });
 
 module.exports = router;

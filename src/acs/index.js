@@ -28,6 +28,9 @@ const { normalizeVerdict, ACS_DECISIONS, AWARE_DECISIONS } = require('./normaliz
 const { resolveTransform, validateTransformPath } = require('./transform');
 const { validate, assertValid, SchemaError } = require('./validator');
 const { getSchema, getReservedReasons } = require('./schemas');
+const manifest = require('./manifest');
+const { PolicyBridge, resolveManifestPath } = require('./policy-bridge');
+const yaml = require('./yaml');
 
 /**
  * Wire the ACS adapter into AWARE's evidence trail.
@@ -112,6 +115,20 @@ module.exports = {
   isFailClosed,
   isReservedReason,
   getReservedReasons,
+
+  // Manifests and interoperability
+  validateManifest: manifest.validateManifest,
+  exportManifest: manifest.exportManifest,
+  parseManifest: manifest.parseManifest,
+  loadManifestFile: manifest.loadManifestFile,
+  mergeManifests: manifest.mergeManifests,
+  resolveExtends: manifest.resolveExtends,
+  toYaml: manifest.toYaml,
+  AWARE_ADAPTER: manifest.AWARE_ADAPTER,
+  PolicyBridge,
+  resolveManifestPath,
+  parseSimpleYaml: yaml.parseSimpleYaml,
+  renderYaml: yaml.renderYaml,
 
   // Normalisation
   normalizeVerdict,

@@ -60,12 +60,14 @@ function resolveManifestPath(manifestPath, snapshot) {
     return { ok: false, value: undefined, reason: 'runtime_error:manifest_invalid' };
   }
 
-  // `$` and `$.name` are aliases for `$snap` and `$snap.name`.
+  // `$` and `$.name` are aliases for `$snap` and `$snap.name` (ACS SPEC
+  // section 3.1). The `$` alias also accepts a bracket segment, so
+  // `$["name.with.dot"]` resolves the same member as `$snap["name.with.dot"]`.
   let rest;
   if (manifestPath === '$') {
     rest = '';
-  } else if (manifestPath.startsWith('$.')) {
-    rest = manifestPath.slice(1); // keep the leading dot
+  } else if (manifestPath.startsWith('$.') || manifestPath.startsWith('$[')) {
+    rest = manifestPath.slice(1); // keep the leading separator
   } else if (manifestPath.startsWith('$snap')) {
     rest = manifestPath.slice('$snap'.length);
   } else {
@@ -92,6 +94,21 @@ function resolveManifestPath(manifestPath, snapshot) {
       }
       segments.push(name);
     } else if (ch === '[') {
+      // The bracketed form is `["name"]`, and the name may itself contain
+      // a bracket or a dot. So the closing quote is found FIRST, and the
+      // closing bracket after it. ACS SPEC section 3: "a `["name"]` segment
+      // selects an object member whose name contains a dot or a bracket."
+      const quoted = rest[i + 1];
+      if (quoted === '"' || quoted === "'") {
+        const endQuote = rest.indexOf(quoted, i + 2);
+        if (endQuote === -1 || rest[endQuote + 1] !== ']') {
+          return { ok: false, value: undefined, reason: 'runtime_error:manifest_invalid' };
+        }
+        segments.push(rest.slice(i + 2, endQuote));
+        i = endQuote + 2;
+        continue;
+      }
+
       const close = rest.indexOf(']', i);
       if (close === -1) {
         return { ok: false, value: undefined, reason: 'runtime_error:manifest_invalid' };
@@ -103,12 +120,8 @@ function resolveManifestPath(manifestPath, snapshot) {
           return { ok: false, value: undefined, reason: 'runtime_error:manifest_invalid' };
         }
         segments.push(index);
-      } else if (
-        (inner.startsWith('"') && inner.endsWith('"') && inner.length >= 2)
-        || (inner.startsWith("'") && inner.endsWith("'") && inner.length >= 2)
-      ) {
-        segments.push(inner.slice(1, -1));
       } else {
+        // An unquoted bracket segment is not part of the grammar.
         return { ok: false, value: undefined, reason: 'runtime_error:manifest_invalid' };
       }
       i = close + 1;

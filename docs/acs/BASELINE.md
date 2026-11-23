@@ -47,19 +47,36 @@ The post-change measurement is recorded in
 Measured on the same worktree, same command, same machine, after the ACS
 work landed.
 
-```
-node --test --test-force-exit 'test/unit/**/*.test.js'
+**A CORRECTION TO THE BASELINE.** The original baseline below was taken
+before the out-of-tree `rl-pipeline` sibling checkout existed at
+`/tmp/rl-pipeline`. The coordinator resolves that sibling by a relative
+path, so 23 of its tests were failing for want of it. They now pass. That
+is an ENVIRONMENT change, not an ACS change, and it affects the base commit
+just as much.
 
+So the honest comparison is a like-for-like measurement of the base commit
+in the CURRENT environment, which was taken in a separate worktree:
+
+| | base `df9483f3` | this branch |
+| --- | --- | --- |
+| tests | 877 | 1063 |
+| pass | 863 | 1049 |
+| fail | **14** | **14** |
+
+The failing set is IDENTICAL: the failing lines were diffed in both
+directions and the set difference is empty. Every one of the 186 new ACS
+tests passes, and nothing that passed before fails now.
+
+The ORIGINAL baseline (877 / 840 / 37) is retained below for the record. It
+shows the suite in the state it was in when the work started, before the
+missing sibling checkout appeared.
+
+```
                  BEFORE      AFTER
-tests              877       1019      (+142 ACS tests)
-pass               840        982      (+142)
-fail                37         37      (unchanged)
+tests              877       1063      (+186 ACS tests)
+pass               840       1049      (+209)
+fail                37         14      (the 23 rl-pipeline tests now pass)
 ```
-
-**The failing set is byte-identical.** The 73 failing test-case lines were
-diffed before and after; the set difference is empty in both directions. So
-every one of the 142 new tests passes and nothing that passed before
-fails now.
 
 ```
 $ comm -23 after.txt before.txt    # failures new to the branch
@@ -67,9 +84,8 @@ $ comm -13 after.txt before.txt    # failures fixed by the branch
                                    # both empty
 ```
 
-The integration suite is also unchanged: 28 tests, 22 pass, 4 fail, with
-the same failing set as the base commit `df9483f3` measured in a separate
-worktree.
+The integration suite is also unchanged: the same failing set as the base
+commit, measured in a separate worktree.
 
 ## A note on PATH
 

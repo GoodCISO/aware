@@ -702,3 +702,56 @@ The branch's answer is threefold:
 
 The third is the one that generalises. A behavioural test only sees the
 paths it injects; the scan sees the code.
+
+---
+
+## 14. Phase 3 review findings and their fixes
+
+An adversarial review of the Phase 3 code (the manifest module, the YAML
+subset and the policy bridge) found **3 defects**. All three were in code
+that **parses or resolves a policy document**, which is the worst place for
+a defect: the document is read as something other than what it says, and
+nothing reports it.
+
+| ID | Severity | Defect | Fix |
+| --- | --- | --- | --- |
+| YAML-1 | High | The YAML parser read a trailing COMMENT as part of the value. `a: x # y` produced the string `x # y` where the YAML spec, and every reference parser, produce the string `x`. | The scalar parser strips a trailing comment. A `#` starts a comment only when it is preceded by whitespace or begins the value; a `#` inside a word, or inside a quoted string, is part of the value. |
+| PATH-1 | Medium | The path resolver rejected a bracket segment on the `$` alias, so `$["name.with.dot"]` failed where `$snap["name.with.dot"]` worked. ACS SPEC section 3.1 makes them the same root. | The `$` alias accepts both the `.name` and the `["name"]` forms. |
+| PATH-2 | Medium | The path resolver found the closing BRACKET before the closing QUOTE, so a member whose name contains a bracket — `$snap["br[key]"]` — could not be addressed. The bracketed form exists precisely for names containing a dot or a bracket. | The closing quote is found first, and the closing bracket after it. An UNQUOTED bracket segment is still refused. |
+
+### How YAML-1 was verified
+
+The expectation is not "whatever the code does". The reference behaviour
+was established against an independent YAML parser:
+
+```
+reference parser:  a: x # y      ->  {'a': 'x'}
+this parser, before the fix:        ->  {'a': 'x # y'}     WRONG
+this parser, after the fix:         ->  {'a': 'x'}          right
+```
+
+The regression suite checks six comment cases against that reference
+behaviour, including the two that a naive fix would break: a `#` inside a
+quoted string, and a `#` with no preceding whitespace inside a word.
+
+### The round-trip test was checked for meaningfulness
+
+A round-trip test that cannot fail proves nothing. So it was verified by
+breaking the round trip on purpose:
+
+```
+mutation: the policy bridge resolves the manifest's policy_target against a
+           DIFFERENT snapshot than the direct evaluation uses.
+
+result:   the round-trip test FAILS with a verdict mismatch.
+```
+
+The mutation was reverted and the suite returned to green.
+
+### A note on the merge rule
+
+ACS SPEC section 2.2 says a repeated binding for the same intervention
+point must be **structurally identical**, and a difference is a merge
+conflict. The adapter implements that: a child that binds a point
+differently from its parent makes the whole resolution FAIL, rather than
+letting the child win silently.

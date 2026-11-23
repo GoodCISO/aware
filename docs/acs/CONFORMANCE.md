@@ -327,21 +327,30 @@ npm test
 
 | Suite | Tests | Pass | Fail |
 | --- | --- | --- | --- |
-| `test/unit/acs/` | 142 | 142 | 0 |
-| `test/unit/**` (whole) | 1019 | 982 | 37 |
-| `test/integration/**` | 28 | 22 | 4 |
+| `test/unit/acs/` | 186 | 186 | 0 |
+| `test/unit/**` (whole) | 1063 | 1049 | 14 |
+| `test/integration/**` | 28 | 21-22 | 5-6 |
 
-**No regressions.** The whole unit suite went from 877 tests / 840 pass /
-37 fail to 996 / 959 / 37. The set of failing test cases is **identical**
-before and after — the 73 failing lines were diffed in both directions and
-the set difference is empty. The integration suite has the same failing set
-as the base commit, measured in a separate worktree.
+**No regressions.** The base commit `df9483f3`, measured in a separate
+worktree in the same environment, gives **877 tests / 863 pass / 14 fail**.
+This branch gives **1063 / 1049 / 14**. The failing set is **identical** —
+the failing lines were diffed in both directions and the set difference is
+empty. All 186 new ACS tests pass, and nothing that passed before fails
+now.
 
-The 37 unit failures and 4 integration failures are pre-existing and
-environmental: missing optional dependencies (`src/ui/node_modules`, an
-out-of-tree `rl-pipeline` import) and missing deploy fixtures. They fail
-identically on `df9483f3` without any ACS code. `BASELINE.md` records the
-full baseline.
+> The original baseline (877 / 840 / 37) was taken before the out-of-tree
+> `rl-pipeline` sibling checkout existed at `/tmp/rl-pipeline`. The
+> coordinator resolves that sibling by a relative path, so 23 of its tests
+> were failing for want of it and now pass. That is an environment change,
+> not an ACS change, and it affects the base commit equally — which is why
+> the comparison above is a like-for-like measurement of the base commit
+> taken in the current environment. `BASELINE.md` records both.
+
+The remaining 14 unit failures and the integration failures are
+pre-existing and environmental: missing optional dependencies
+(`src/ui/node_modules`) and missing deploy fixtures. They fail identically
+on `df9483f3` without any ACS code. `BASELINE.md` records the full
+baseline.
 
 ---
 

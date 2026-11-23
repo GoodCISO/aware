@@ -55,6 +55,38 @@ const REFUSED_CONSTRUCTS = [
 ];
 
 /**
+ * Strip a trailing comment from an unquoted scalar.
+ *
+ * YAML starts a comment at a `#` that is preceded by whitespace or that
+ * begins the value. A `#` INSIDE a word is not a comment, and a `#` inside
+ * a quoted string is not a comment either.
+ *
+ * Getting this wrong changes a policy document's meaning: `a: x # y` is
+ * the string `x`, not the string `x # y`.
+ *
+ * @param {string} text - The scalar text.
+ * @returns {string} The text with any trailing comment removed.
+ */
+function stripComment(text) {
+  let quote = null;
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text[i];
+    if (quote) {
+      if (ch === quote) quote = null;
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch;
+      continue;
+    }
+    if (ch === '#' && (i === 0 || /\s/.test(text[i - 1]))) {
+      return text.slice(0, i);
+    }
+  }
+  return text;
+}
+
+/**
  * Parse a scalar value.
  *
  * @param {string} text - The scalar text.
@@ -63,7 +95,7 @@ const REFUSED_CONSTRUCTS = [
  * @throws {YamlError} When the scalar cannot be parsed with certainty.
  */
 function parseScalar(text, line) {
-  const trimmed = text.trim();
+  const trimmed = stripComment(text).trim();
 
   if (trimmed === '') return '';
   if (trimmed === '~' || trimmed === 'null' || trimmed === 'Null' || trimmed === 'NULL') return null;

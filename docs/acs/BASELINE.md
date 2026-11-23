@@ -92,11 +92,26 @@ of the suite on this host, not something the ACS work introduced. The
 
 One trainer test, `test/unit/trainer/index.test.js` — "submit failure —
 records failed run with exit_code=1", is **load-sensitive**. It passes 19/19
-when its file is run alone, and it failed once in three full-suite runs.
-The ACS work touches no trainer code, and the failing assertion is about a
-mock database's UPDATE count, so this is a pre-existing flake under
-parallel load rather than a regression.
+when its file is run alone, and it fails in a fraction of full-suite runs.
+
+**It is proven pre-existing, not merely assumed to be.** Measured on the
+base commit `df9483f3` in a separate worktree, with NO ACS code present:
+
+```
+BASE, full unit suite, 4 consecutive runs:
+  877 tests, 839-840 pass, 37-38 fail
+  the trainer "submit failure" case FAILED IN ALL FOUR RUNS
+
+BASE, trainer file alone:
+  19 tests, 19 pass, 0 fail
+```
+
+The test file was last changed in v2.7.0 (`f90196e2`), long before this
+branch, and the ACS work touches no trainer code. The failing assertion is
+about a mock database UPDATE count under parallel load. It is inherited
+from the base, not introduced here.
 
 The numbers recorded above are from a run in which it did not flake. Three
-consecutive full-suite runs gave the same result: 1019 tests, 982 pass, 37
-fail.
+consecutive full-suite runs on this branch gave 1019 tests, 982 pass,
+37 fail. Runs in which the trainer case flaked showed 38. The base commit
+behaves the same way.

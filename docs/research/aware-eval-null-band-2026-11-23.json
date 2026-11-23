@@ -1,0 +1,777 @@
+{
+  "title": "AWARE eval harness null band \u2014 measured 2026-11-23",
+  "card": "t_44535590",
+  "source": "arXiv:2611.14068 (Rice, Park, Kwasinski; RIT; v1 2026-11-10), section 9",
+  "method": "N draws of the SAME model on the SAME fixtures against the live Ollama sidecar, via the real harness. The unseeded regime reproduces the pre-change request body {model, prompt, stream:false}; the seeded regime uses the post-change body with a fixed seed and temperature 0.",
+  "host": {
+    "ollama_version": "0.40.11",
+    "node_version": "v26.13.0",
+    "model": "qwen3.5:9b",
+    "model_digest": "6488c96fa5faab64bb65",
+    "model_size_bytes": 6594474711,
+    "per_problem_timeout_ms": 60000
+  },
+  "regimes": {
+    "unseeded": {
+      "mode": "unseeded",
+      "model": "qwen3.5:9b",
+      "runs": 5,
+      "seed": null,
+      "temperature": null,
+      "timeoutMs": 60000,
+      "measuredAt": "2026-11-23T05:27:00.609Z",
+      "accuracies": [
+        0.5,
+        0.6000000000000001,
+        0.5,
+        0.5,
+        0.4
+      ],
+      "mean": 0.5,
+      "sd": 0.07071067811865477,
+      "min": 0.4,
+      "max": 0.6000000000000001,
+      "range": 0.20000000000000007,
+      "gsm8k": {
+        "accuracies": [
+          0.6,
+          0.8,
+          0.6,
+          0.6,
+          0.6
+        ],
+        "sd": 0.08944271909999163
+      },
+      "livecodebench": {
+        "accuracies": [
+          0.4,
+          0.4,
+          0.4,
+          0.4,
+          0.2
+        ],
+        "sd": 0.08944271909999159
+      },
+      "draws": [
+        {
+          "label": "unseeded-draw1",
+          "accuracy": 0.5,
+          "gsm8k": 0.6,
+          "livecodebench": 0.4,
+          "elapsed_s": 170.5,
+          "perProblemScores": [
+            {
+              "id": "gsm8k-001",
+              "score": 1,
+              "error": null
+            },
+            {
+              "id": "gsm8k-002",
+              "score": 1,
+              "error": null
+            },
+            {
+              "id": "gsm8k-003",
+              "score": 1,
+              "error": null
+            },
+            {
+              "id": "gsm8k-004",
+              "score": 0,
+              "error": null
+            },
+            {
+              "id": "gsm8k-005",
+              "score": 0,
+              "error": "error: This operation was aborted"
+            },
+            {
+              "id": "lcb-001",
+              "score": 1,
+              "error": null
+            },
+            {
+              "id": "lcb-002",
+              "score": 1,
+              "error": null
+            },
+            {
+              "id": "lcb-003",
+              "score": 0,
+              "error": null
+            },
+            {
+              "id": "lcb-004",
+              "score": 0,
+              "error": null
+            },
+            {
+              "id": "lcb-005",
+              "score": 0,
+              "error": null
+            }
+          ],
+          "timedOutProblems": [
+            "gsm8k-005"
+          ]
+        },
+        {
+          "label": "unseeded-draw2",
+          "accuracy": 0.6000000000000001,
+          "gsm8k": 0.8,
+          "livecodebench": 0.4,
+          "elapsed_s": 110.4,
+          "perProblemScores": [
+            {
+              "id": "gsm8k-001",
+              "score": 1,
+              "error": null
+            },
+            {
+              "id": "gsm8k-002",
+              "score": 1,
+              "error": null
+            },
+            {
+              "id": "gsm8k-003",
+              "score": 1,
+              "error": null
+            },
+            {
+              "id": "gsm8k-004",
+              "score": 0,
+              "error": null
+            },
+            {
+              "id": "gsm8k-005",
+              "score": 1,
+              "error": null
+            },
+            {
+              "id": "lcb-001",
+              "score": 1,
+              "error": null
+            },
+            {
+              "id": "lcb-002",
+              "score": 1,
+              "error": null
+            },
+            {
+              "id": "lcb-003",
+              "score": 0,
+              "error": null
+            },
+            {
+              "id": "lcb-004",
+              "score": 0,
+              "error": null
+            },
+            {
+              "id": "lcb-005",
+              "score": 0,
+              "error": null
+            }
+          ],
+          "timedOutProblems": []
+        },
+        {
+          "label": "unseeded-draw3",
+          "accuracy": 0.5,
+          "gsm8k": 0.6,
+          "livecodebench": 0.4,
+          "elapsed_s": 168,
+          "perProblemScores": [
+            {
+              "id": "gsm8k-001",
+              "score": 1,
+              "error": null
+            },
+            {
+              "id": "gsm8k-002",
+              "score": 1,
+              "error": null
+            },
+            {
+              "id": "gsm8k-003",
+              "score": 1,
+              "error": null
+            },
+            {
+              "id": "gsm8k-004",
+              "score": 0,
+              "error": null
+            },
+            {
+              "id": "gsm8k-005",
+              "score": 0,
+              "error": "error: This operation was aborted"
+            },
+            {
+              "id": "lcb-001",
+              "score": 1,
+              "error": null
+            },
+            {
+              "id": "lcb-002",
+              "score": 1,
+              "error": null
+            },
+            {
+              "id": "lcb-003",
+              "score": 0,
+              "error": null
+            },
+            {
+              "id": "lcb-004",
+              "score": 0,
+              "error": null
+            },
+            {
+              "id": "lcb-005",
+              "score": 0,
+              "error": null
+            }
+          ],
+          "timedOutProblems": [
+            "gsm8k-005"
+          ]
+        },
+        {
+          "label": "unseeded-draw4",
+          "accuracy": 0.5,
+          "gsm8k": 0.6,
+          "livecodebench": 0.4,
+          "elapsed_s": 176.2,
+          "perProblemScores": [
+            {
+              "id": "gsm8k-001",
+              "score": 1,
+              "error": null
+            },
+            {
+              "id": "gsm8k-002",
+              "score": 1,
+              "error": null
+            },
+            {
+              "id": "gsm8k-003",
+              "score": 1,
+              "error": null
+            },
+            {
+              "id": "gsm8k-004",
+              "score": 0,
+              "error": null
+            },
+            {
+              "id": "gsm8k-005",
+              "score": 0,
+              "error": "error: This operation was aborted"
+            },
+            {
+              "id": "lcb-001",
+              "score": 1,
+              "error": null
+            },
+            {
+              "id": "lcb-002",
+              "score": 1,
+              "error": null
+            },
+            {
+              "id": "lcb-003",
+              "score": 0,
+              "error": null
+            },
+            {
+              "id": "lcb-004",
+              "score": 0,
+              "error": null
+            },
+            {
+              "id": "lcb-005",
+              "score": 0,
+              "error": null
+            }
+          ],
+          "timedOutProblems": [
+            "gsm8k-005"
+          ]
+        },
+        {
+          "label": "unseeded-draw5",
+          "accuracy": 0.4,
+          "gsm8k": 0.6,
+          "livecodebench": 0.2,
+          "elapsed_s": 171,
+          "perProblemScores": [
+            {
+              "id": "gsm8k-001",
+              "score": 1,
+              "error": null
+            },
+            {
+              "id": "gsm8k-002",
+              "score": 1,
+              "error": null
+            },
+            {
+              "id": "gsm8k-003",
+              "score": 1,
+              "error": null
+            },
+            {
+              "id": "gsm8k-004",
+              "score": 0,
+              "error": null
+            },
+            {
+              "id": "gsm8k-005",
+              "score": 0,
+              "error": "error: This operation was aborted"
+            },
+            {
+              "id": "lcb-001",
+              "score": 1,
+              "error": null
+            },
+            {
+              "id": "lcb-002",
+              "score": 0,
+              "error": null
+            },
+            {
+              "id": "lcb-003",
+              "score": 0,
+              "error": null
+            },
+            {
+              "id": "lcb-004",
+              "score": 0,
+              "error": null
+            },
+            {
+              "id": "lcb-005",
+              "score": 0,
+              "error": null
+            }
+          ],
+          "timedOutProblems": [
+            "gsm8k-005"
+          ]
+        }
+      ]
+    },
+    "seeded": {
+      "mode": "seeded",
+      "model": "qwen3.5:9b",
+      "runs": 5,
+      "seed": 20261123,
+      "temperature": 0,
+      "timeoutMs": 60000,
+      "measuredAt": "2026-11-23T05:41:10.685Z",
+      "accuracies": [
+        0.5,
+        0.5,
+        0.5,
+        0.5,
+        0.5
+      ],
+      "mean": 0.5,
+      "sd": 0,
+      "min": 0.5,
+      "max": 0.5,
+      "range": 0,
+      "gsm8k": {
+        "accuracies": [
+          0.6,
+          0.6,
+          0.6,
+          0.6,
+          0.6
+        ],
+        "sd": 0
+      },
+      "livecodebench": {
+        "accuracies": [
+          0.4,
+          0.4,
+          0.4,
+          0.4,
+          0.4
+        ],
+        "sd": 0
+      },
+      "draws": [
+        {
+          "label": "seeded-draw1",
+          "accuracy": 0.5,
+          "gsm8k": 0.6,
+          "livecodebench": 0.4,
+          "elapsed_s": 170.2,
+          "perProblemScores": [
+            {
+              "id": "gsm8k-001",
+              "score": 1,
+              "error": null
+            },
+            {
+              "id": "gsm8k-002",
+              "score": 1,
+              "error": null
+            },
+            {
+              "id": "gsm8k-003",
+              "score": 1,
+              "error": null
+            },
+            {
+              "id": "gsm8k-004",
+              "score": 0,
+              "error": null
+            },
+            {
+              "id": "gsm8k-005",
+              "score": 0,
+              "error": "error: This operation was aborted"
+            },
+            {
+              "id": "lcb-001",
+              "score": 1,
+              "error": null
+            },
+            {
+              "id": "lcb-002",
+              "score": 1,
+              "error": null
+            },
+            {
+              "id": "lcb-003",
+              "score": 0,
+              "error": null
+            },
+            {
+              "id": "lcb-004",
+              "score": 0,
+              "error": null
+            },
+            {
+              "id": "lcb-005",
+              "score": 0,
+              "error": null
+            }
+          ],
+          "timedOutProblems": [
+            "gsm8k-005"
+          ]
+        },
+        {
+          "label": "seeded-draw2",
+          "accuracy": 0.5,
+          "gsm8k": 0.6,
+          "livecodebench": 0.4,
+          "elapsed_s": 169.7,
+          "perProblemScores": [
+            {
+              "id": "gsm8k-001",
+              "score": 1,
+              "error": null
+            },
+            {
+              "id": "gsm8k-002",
+              "score": 1,
+              "error": null
+            },
+            {
+              "id": "gsm8k-003",
+              "score": 1,
+              "error": null
+            },
+            {
+              "id": "gsm8k-004",
+              "score": 0,
+              "error": null
+            },
+            {
+              "id": "gsm8k-005",
+              "score": 0,
+              "error": "error: This operation was aborted"
+            },
+            {
+              "id": "lcb-001",
+              "score": 1,
+              "error": null
+            },
+            {
+              "id": "lcb-002",
+              "score": 1,
+              "error": null
+            },
+            {
+              "id": "lcb-003",
+              "score": 0,
+              "error": null
+            },
+            {
+              "id": "lcb-004",
+              "score": 0,
+              "error": null
+            },
+            {
+              "id": "lcb-005",
+              "score": 0,
+              "error": null
+            }
+          ],
+          "timedOutProblems": [
+            "gsm8k-005"
+          ]
+        },
+        {
+          "label": "seeded-draw3",
+          "accuracy": 0.5,
+          "gsm8k": 0.6,
+          "livecodebench": 0.4,
+          "elapsed_s": 169.6,
+          "perProblemScores": [
+            {
+              "id": "gsm8k-001",
+              "score": 1,
+              "error": null
+            },
+            {
+              "id": "gsm8k-002",
+              "score": 1,
+              "error": null
+            },
+            {
+              "id": "gsm8k-003",
+              "score": 1,
+              "error": null
+            },
+            {
+              "id": "gsm8k-004",
+              "score": 0,
+              "error": null
+            },
+            {
+              "id": "gsm8k-005",
+              "score": 0,
+              "error": "error: This operation was aborted"
+            },
+            {
+              "id": "lcb-001",
+              "score": 1,
+              "error": null
+            },
+            {
+              "id": "lcb-002",
+              "score": 1,
+              "error": null
+            },
+            {
+              "id": "lcb-003",
+              "score": 0,
+              "error": null
+            },
+            {
+              "id": "lcb-004",
+              "score": 0,
+              "error": null
+            },
+            {
+              "id": "lcb-005",
+              "score": 0,
+              "error": null
+            }
+          ],
+          "timedOutProblems": [
+            "gsm8k-005"
+          ]
+        },
+        {
+          "label": "seeded-draw4",
+          "accuracy": 0.5,
+          "gsm8k": 0.6,
+          "livecodebench": 0.4,
+          "elapsed_s": 168,
+          "perProblemScores": [
+            {
+              "id": "gsm8k-001",
+              "score": 1,
+              "error": null
+            },
+            {
+              "id": "gsm8k-002",
+              "score": 1,
+              "error": null
+            },
+            {
+              "id": "gsm8k-003",
+              "score": 1,
+              "error": null
+            },
+            {
+              "id": "gsm8k-004",
+              "score": 0,
+              "error": null
+            },
+            {
+              "id": "gsm8k-005",
+              "score": 0,
+              "error": "error: This operation was aborted"
+            },
+            {
+              "id": "lcb-001",
+              "score": 1,
+              "error": null
+            },
+            {
+              "id": "lcb-002",
+              "score": 1,
+              "error": null
+            },
+            {
+              "id": "lcb-003",
+              "score": 0,
+              "error": null
+            },
+            {
+              "id": "lcb-004",
+              "score": 0,
+              "error": null
+            },
+            {
+              "id": "lcb-005",
+              "score": 0,
+              "error": null
+            }
+          ],
+          "timedOutProblems": [
+            "gsm8k-005"
+          ]
+        },
+        {
+          "label": "seeded-draw5",
+          "accuracy": 0.5,
+          "gsm8k": 0.6,
+          "livecodebench": 0.4,
+          "elapsed_s": 168.1,
+          "perProblemScores": [
+            {
+              "id": "gsm8k-001",
+              "score": 1,
+              "error": null
+            },
+            {
+              "id": "gsm8k-002",
+              "score": 1,
+              "error": null
+            },
+            {
+              "id": "gsm8k-003",
+              "score": 1,
+              "error": null
+            },
+            {
+              "id": "gsm8k-004",
+              "score": 0,
+              "error": null
+            },
+            {
+              "id": "gsm8k-005",
+              "score": 0,
+              "error": "error: This operation was aborted"
+            },
+            {
+              "id": "lcb-001",
+              "score": 1,
+              "error": null
+            },
+            {
+              "id": "lcb-002",
+              "score": 1,
+              "error": null
+            },
+            {
+              "id": "lcb-003",
+              "score": 0,
+              "error": null
+            },
+            {
+              "id": "lcb-004",
+              "score": 0,
+              "error": null
+            },
+            {
+              "id": "lcb-005",
+              "score": 0,
+              "error": null
+            }
+          ],
+          "timedOutProblems": [
+            "gsm8k-005"
+          ]
+        }
+      ]
+    }
+  },
+  "finding_seed_not_honoured": {
+    "claim": "Ollama 0.40.11 does NOT honour the `seed` field at temperature > 0: two requests with the same seed and temperature 0.8 returned byte-different responses (md5 2d8347970124 vs 46f91dd4f8de). At temperature 0 responses are byte-identical and the seed becomes irrelevant (greedy decoding has nothing to sample).",
+    "consequence": "A harness publishing a seed with a stochastic temperature would look reproducible and not be. The harness therefore defaults temperature to 0 and publishes the sampling mode alongside the seed.",
+    "evidence": [
+      {
+        "temperature": 0.0,
+        "seed": 42,
+        "response_md5": "00bf8ce8383b",
+        "identical_with_same_seed": true
+      },
+      {
+        "temperature": 0.0,
+        "seed": 42,
+        "response_md5": "00bf8ce8383b",
+        "identical_with_same_seed": true
+      },
+      {
+        "temperature": 0.0,
+        "seed": 43,
+        "response_md5": "00bf8ce8383b",
+        "identical_with_same_seed": true
+      },
+      {
+        "temperature": 0.8,
+        "seed": 42,
+        "response_md5": "2d8347970124",
+        "identical_with_same_seed": false
+      },
+      {
+        "temperature": 0.8,
+        "seed": 42,
+        "response_md5": "46f91dd4f8de",
+        "identical_with_same_seed": false
+      },
+      {
+        "temperature": 0.8,
+        "seed": 43,
+        "response_md5": "f1e1ba0ed917",
+        "identical_with_same_seed": false
+      }
+    ]
+  },
+  "variance_decomposition": {
+    "sampling": "lcb-002 (is_even) passes in unseeded draws 1-4 and fails in draw 5: same model, same fixtures, different code. This is the paper's Tier-B defect and the seeding removes it (the seeded band is 0.0pp wide).",
+    "infrastructure": "gsm8k-005 timed out at 60s in 4 of 5 unseeded draws and in 5 of 5 seeded draws. A timeout scores 0, so a slow-but-correct answer is indistinguishable from a wrong one. No seeding removes this; the disclosure block counts timeouts under axis 5 so a reader can see how many points were decided by a timeout."
+  },
+  "gate": {
+    "historical_threshold_pp": 3.0,
+    "historical_threshold_source": "ADR (internal) Phase 4 D5",
+    "measured_unseeded_band_range_pp": 20.0,
+    "note": "The historical 3pp gate was 6.7x narrower than the measured 20pp null band. After the change the threshold is derived from the measured band and the verdict additionally requires a paired 95% t interval that excludes zero."
+  },
+  "fixture_limitation": {
+    "fixture_count": 10,
+    "composition": "5 GSM8K + 5 LiveCodeBench",
+    "statement": "At 10 problems the resolution floor is coarser than the historical 3pp target: a 20pp effect is roughly one problem. eval-delta.sh reports the fixture count required to resolve the threshold effect at 95% confidence rather than hiding the limit."
+  }
+}

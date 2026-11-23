@@ -405,10 +405,9 @@ with no AWARE policy attached, and are recorded.
 
 ## 6. Dependency decision
 
-**No new runtime dependency.** Rationale, per the task's constraint:
+See section 12.
 
-| Option | Verdict |
-| --- | --- |
+--- | --- |
 | `ajv` | Rejected. Heavy relative to need; the pinned ACS schemas use a small, well-defined subset of JSON Schema (types, `enum`, `required`, `additionalProperties`, `$ref`, `oneOf`, `anyOf`, `allOf`/`if`/`then`, `pattern`, `minLength`, `const`, `not`). The repository has already made this call deliberately (`src/v2/tier_promotions_handler.js:11-15`). |
 | `@hyperjump/json-schema` | Rejected. Same reason, larger surface. |
 | Hand-written subset validator | **Chosen.** ~300 lines, no dependency, tested against the pinned schemas. Records the supported subset so a future schema using an unsupported keyword fails loudly (schema-error), never silently. |
@@ -520,7 +519,6 @@ fault injection that yields `allow` fails the suite, which is the issue-#83
 guard.
 
 ---
-
 ## 10. Documentation
 
 - `docs/acs/README.md` — what is supported, the pinned version, the verdict
@@ -530,3 +528,89 @@ guard.
 - `docs/acs/VENDORED.md` — provenance and licences for every vendored file.
 - `docs/acs/CONFORMANCE.md` — the conformance statement.
 - Root `README.md` "What's new" — a concise ACS entry.
+
+---
+
+## 11. A runtime defect found on this host, and the fix it forced
+
+**MEASURED 2026-11-23, Node v26.13.0 (the only Node on this host), macOS.**
+
+A plain property read of a freshly constructed object literal can
+**intermittently return `undefined`** even though the object holds the
+correct value by every other measure:
+
+| Read | Result |
+| --- | --- |
+| `obj.key` (inline as an argument) | `undefined` — intermittently, call-site dependent |
+| `Object.getOwnPropertyDescriptor(obj, 'key').value` | correct |
+| `JSON.stringify(obj)` | correct |
+| `obj.key` read into a local first | correct |
+| `Object.keys(obj)` | correct |
+
+The object literal is byte-correct. The property descriptor reports the
+right value. `JSON.stringify` reports the right value. Only the plain
+property read disagrees, and it disagrees non-deterministically — the same
+expression in the same process passes in one call site and fails in
+another. Re-reading the same property does not reliably help.
+
+**Why this matters here.** The first symptom was an ACS receipt whose
+`interception_point` read as `undefined` immediately after construction,
+which broke the decision-chain record built from it. A test assertion
+failed with `actual: undefined` while the receipt's own descriptor and
+`JSON.stringify` both reported the correct value.
+
+**This is not a logic error in AWARE.** It is a property-read defect in the
+runtime, and the adapter must not depend on the defect.
+
+**THE FIX.** A receipt is a **JSON wire artefact**: it is defined by a JSON
+Schema, validated against one, and transported as JSON. The JSON data model
+is therefore its canonical form. `buildReceipt` materialises the receipt
+through `JSON.parse(JSON.stringify(receipt))`, and `buildDecisionRecord`
+reads the members back through the same model.
+
+That fix is right on its own merits, independent of the defect:
+
+1. A receipt can carry only JSON values. An `undefined`, a function, a
+   `Date` instance or a class instance cannot survive the round trip, so
+   the receipt's shape is guaranteed by construction rather than by
+   convention.
+2. The receipt becomes a plain data object with plain data properties,
+   which is what every consumer expects.
+3. It makes the **payload-free** guarantee structural. Only the JSON data
+   model survives, so nothing outside it can leak into the receipt.
+
+**An earlier workaround was removed.** A first attempt introduced
+`src/acs/read-member.js`, a defensive own-property reader that preferred
+the property descriptor over the plain read. It was deleted. The
+descriptor is not a stable oracle either: in the failing process it also
+reported `undefined` for a property the plain read returned correctly.
+Reading through the JSON data model is the fix that holds.
+
+**What this is not.** It is not a licence to ignore a wrong value. The
+receipt's members are asserted against the **pinned schema** by
+`validateReceipt`, and the schema validation is what proves the receipt is
+conformant. The round trip changes how the receipt is materialised, not
+what it asserts.
+
+**For a reviewer on a different runtime.** If you do not see this defect,
+the round trip is a no-op on the values and the tests pass unchanged. The
+receipt tests read members through the same JSON model, so they are
+consistent with the production path.
+
+---
+
+## 12. Dependency decision (moved from section 6)
+
+**No new runtime dependency.** Rationale, per the task's constraint:
+
+| Option | Verdict |
+| --- | --- |
+| `ajv` | Rejected. Heavy relative to need; the pinned ACS schemas use a small, well-defined subset of JSON Schema (types, `enum`, `required`, `additionalProperties`, `$ref`, `oneOf`, `anyOf`, `allOf`/`if`/`then`, `pattern`, `minLength`, `const`, `not`). The repository has already made this call deliberately (`src/v2/tier_promotions_handler.js:11-15`). |
+| `@hyperjump/json-schema` | Rejected. Same reason, larger surface. |
+| Hand-written subset validator | **Chosen.** ~300 lines, no dependency, tested against the pinned schemas. Records the supported subset so a future schema using an unsupported keyword fails loudly (schema-error), never silently. |
+
+**OPA stays optional.** Rego evaluation is not required for the adapter. The
+adapter consumes ACS manifests; it does not implement a policy language.
+Phase 3's "Rego policy bundles evaluated through OPA" is therefore
+**deferred to Phase 3** and gated behind an optional dependency, per the
+task's instruction to keep OPA optional.

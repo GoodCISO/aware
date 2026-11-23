@@ -364,13 +364,21 @@ class AcsDecisionEngine {
     }
 
     // --- Step 3: normalise into an ACS verdict.
+    //
+    // A transform is a separate verdict, not a modifier of an allow. ACS
+    // SPEC section 14: "`transform` is the only form of value rewriting a
+    // verdict can request." So when the AWARE decision carries a
+    // transform body, the verdict IS a transform verdict.
     let verdict;
     try {
+      const isTransform = awareDecision.transform
+        && typeof awareDecision.transform === 'object';
       verdict = normalizeVerdict({
-        decision: awareDecision.decision,
+        decision: isTransform ? 'transform' : awareDecision.decision,
         reason: awareDecision.reason,
         message: this._verdictMessage(awareDecision),
         approval: approvalBlock,
+        transform: isTransform ? awareDecision.transform : undefined,
       });
     } catch (err) {
       return this._failResult(

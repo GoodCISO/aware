@@ -12,6 +12,7 @@
   },
   "files": [
     "src/agents/",
+    "src/acs/",
     "src/api/",
     "src/audit/",
     "src/budget/",
@@ -39,6 +40,7 @@
     "src/v2/",
     "scripts/seed-dev-users.js",
     "scripts/seed-dev-agents.js",
+    "docs/acs/",
     "docs/adr/",
     "docs/compliance/",
     "docs/security/",

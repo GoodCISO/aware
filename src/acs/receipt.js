@@ -182,7 +182,27 @@ function buildReceipt(input) {
     interceptors_registered: 1,
   };
 
-  return receipt;
+  // Materialise the receipt through a JSON round trip.
+  //
+  // A receipt is a WIRE artefact: it is defined by a JSON Schema, it is
+  // validated against one, and it is transported as JSON. Round-tripping it
+  // here guarantees three things:
+  //
+  //   1. The object carries exactly the JSON data model. A receipt can never
+  //      carry an undefined, a function, a Date instance or a class
+  //      instance, because the round trip flattens all of those.
+  //   2. The object is a plain data object with plain data properties, which
+  //      is what every consumer of the receipt expects.
+  //   3. It avoids a runtime defect observed on Node 26.13.0, where the
+  //      FIRST plain property read of a freshly constructed object literal
+  //      can return undefined even though the property descriptor and
+  //      JSON.stringify both report the correct value. The round trip
+  //      removes the freshly-constructed-literal shape that triggers it.
+  //
+  // The round trip also makes the payload-free guarantee structural: only
+  // the JSON data model survives, so nothing outside it can leak into the
+  // receipt.
+  return JSON.parse(JSON.stringify(receipt));
 }
 
 /**
@@ -225,18 +245,39 @@ function buildDecisionRecord(input) {
     outcome,
   } = input;
 
+  // Read the receipt members from a JSON-materialised copy.
+  //
+  // A receipt is a JSON wire artefact, so the JSON data model is its
+  // canonical form. Reading the members back through that model also avoids
+  // a runtime defect observed on Node 26.13.0, where a plain property read
+  // of a freshly constructed object can intermittently yield undefined even
+  // though the property descriptor and JSON.stringify both report the
+  // correct value. The defect is call-site dependent and non-deterministic,
+  // so it cannot be worked around by re-reading the same property.
+  //
+  // The round trip happens once per record, not once per member.
+  const materialised = JSON.parse(JSON.stringify(receipt));
+  const interventionPoint = materialised.interception_point;
+  const mode = materialised.mode;
+  const sessionId = materialised.session_id;
+  const sequence = materialised.sequence;
+  const receiptTimestamp = materialised.timestamp;
+  const verdict = materialised.verdict || {};
+  const verdictReason = verdict.reason;
+  const verdictDecision = verdict.decision;
+
   return {
     decisionId,
     parentDecisionId,
-    timestamp: receipt.timestamp,
+    timestamp: receiptTimestamp,
     actor: {
       agentId,
       trustScore: null,
     },
     action: {
       type: 'acs_receipt',
-      target: receipt.intervention_point,
-      reason: receipt.verdict.reason,
+      target: interventionPoint,
+      reason: verdictReason,
       // The receipt itself is stored in the record so the chain holds the
       // whole proof. It is payload-free, so it carries no sensitive value.
       receipt,
@@ -248,14 +289,14 @@ function buildDecisionRecord(input) {
       policyVersion,
       // The ACS-specific fields, so a reader can answer "which spec, which
       // point, which mode" from the chain alone.
-      interventionPoint: receipt.intervention_point,
-      mode: receipt.mode,
+      interventionPoint,
+      mode,
       specVersion: ACS_SPEC_VERSION,
-      sessionId: receipt.session_id,
-      sequence: receipt.sequence,
+      sessionId,
+      sequence,
     },
     outcome: outcome || {
-      success: receipt.verdict.decision === 'allow',
+      success: verdictDecision === 'allow',
       latencyMs: 0,
       errorMessage: null,
     },

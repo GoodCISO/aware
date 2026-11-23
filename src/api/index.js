@@ -10,6 +10,7 @@ const alertsRouter = require('./routes/alerts');
 const resourcesRouter = require('./routes/resources');
 const agentsRouter = require('./routes/agents');
 const policiesRouter = require('./routes/policies');
+const acsRouter = require('./routes/acs');
 const metricsRouter = require('./routes/metrics');
 // SC-MOD-015: previously-orphaned routes — see mounting block below.
 const complianceRouter = require('./routes/compliance');
@@ -304,6 +305,12 @@ class APIGateway {
     policyAdapter.post('/:policyId/reload', policyHandlers.reloadPolicyRoute);
     policyAdapter.get('/:policyId/history', policyHandlers.getPolicyHistoryRoute);
     this.app.use('/api/policies/hot', policyAdapter);
+
+    // ACS (Agent Control Specification) transport. The router is mounted
+    // here, AFTER the `this.app.use(authenticateToken)` at line 221, so it
+    // inherits the existing authentication. It is the only AWARE surface
+    // that knows anything about ACS.
+    this.app.use('/api/acs', acsRouter);
 
     // Catch-all for undefined routes
     this.app.use('*', (req, res) => {

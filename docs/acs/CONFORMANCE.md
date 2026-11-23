@@ -302,8 +302,14 @@ These are **not** implemented and are **not** claimed:
 4. **A non-null identity provider.**
 5. **A durable approval store.** The default is in-memory; the audit trail
    is durable regardless.
-6. **A CI job.** The repository has no `.github/workflows` directory; its CI
-   surface is the gitea pipeline, which this branch does not touch.
+6. **A CI job.** The repository has no test-running CI on the public tree:
+   its CI surface is the four-layer PRIVACY filter (the pre-commit and
+   pre-push hooks, the gitea pre-receive, and the gitea
+   lint-private-data workflow), not a test runner. This branch therefore
+   ships `scripts/verify-acs-conformance.sh`, the single command that
+   proves the ACS conformance claims, designed to be callable FROM a CI
+   job when one is added. Wiring it into the gitea pipeline is the one
+   remaining operational step, and it is not done here.
 7. **Interoperation with a live Microsoft Foundry or AGT deployment.** The
    conformance claim is against the pinned specification schemas and the
    upstream reference example, not against a running hosted service.
@@ -316,11 +322,36 @@ These are **not** implemented and are **not** claimed:
 ## 12. How to run these tests
 
 ```bash
-# The ACS suites. 142 tests.
+# The ACS suites. 186 tests.
 node --test 'test/unit/acs/*.test.js'
 
 # The whole unit suite.
 npm test
+
+# The ACS conformance gate: the single command that proves every claim in
+# this document.
+npm run verify:acs
+```
+
+**The conformance gate.** `scripts/verify-acs-conformance.sh` runs six
+checks: the vendored schemas match the pinned SHA-256 table; the pinned
+commit is recorded; every artefact validates against the pinned schema;
+the vendored MIT notice is present; the ACS suites pass; and no adapter
+path catches an error and returns an `allow`.
+
+The last check is the issue-#83 guard at the SOURCE level, complementing
+the behavioural suite: a behavioural test only sees the paths it injects,
+while the scan sees the code.
+
+The gate was checked for meaningfulness by planting a fail-open catch
+block in the decision engine. It failed with exit 1, on both the source
+scan and the behavioural suites. The mutation was reverted and the gate
+returned to exit 0.
+
+It also has a `--json` mode for a CI job:
+
+```bash
+bash scripts/verify-acs-conformance.sh --json
 ```
 
 **Measured results on this branch** (`df9483f3` base, Node v26.13.0, macOS):

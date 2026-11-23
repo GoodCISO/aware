@@ -130,6 +130,26 @@ Cedar dispatcher evaluates with `Context::empty()`, so every context-gated
 `forbid` in the shipped cedar-lib silently never fires" — a policy that
 should have denied returned `allow`, with no error and no warning.
 
+## The conformance gate
+
+```bash
+npm run verify:acs
+```
+
+`scripts/verify-acs-conformance.sh` is the single command that proves every
+claim in `CONFORMANCE.md`. It runs six checks: the vendored schemas match
+the pinned SHA-256 table; the pinned commit is recorded; every artefact
+validates against the pinned schema; the vendored MIT notice is present;
+the ACS suites pass; and no adapter path catches an error and returns an
+`allow`.
+
+The last check is the issue-#83 guard at the SOURCE level, complementing
+the behavioural suite: a behavioural test only sees the paths it injects,
+while the scan sees the code.
+
+It has a `--json` mode for a CI job. It is not wired into the gitea
+pipeline yet; that is the one remaining operational step.
+
 ---
 
 ## Receipts and evidence

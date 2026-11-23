@@ -431,9 +431,11 @@ loads unchanged.
 - [x] `evaluate_only` test
 - [x] the existing suite runs with no regression (996 / 959 / 37, the 37
       pre-existing and identical to the baseline)
-- [ ] a CI job that runs the ACS suites on every push (the repository has
-      no `.github/workflows` directory; the CI surface is the gitea
-      pipeline, which this branch does not touch)
+- [x] a conformance gate: `scripts/verify-acs-conformance.sh`, runnable as
+      one command and callable from a CI job
+- [ ] wiring that gate into the gitea pipeline (the repository has no
+      test-running CI on the public tree; its CI surface is the four-layer
+      privacy filter)
 
 ---
 

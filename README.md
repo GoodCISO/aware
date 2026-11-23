@@ -65,6 +65,7 @@ Use `src/compliance/framework-mapper.js` as the source of truth for which AWARE 
   - Supports `enforce` and `evaluate_only` modes.
   - **Fails closed** on every error path, with a registered `runtime_error:*` reason — the guard for the issue-#83 class, where a gate silently stopped firing and allowed what it should have denied.
   - Emits a payload-free ACS receipt per evaluation into the existing hash-chained decision log, linked to the execution outcome.
+  - **Policy interoperability:** imports ACS manifests (including `extends` chains), exports AWARE's policy binding as an ACS manifest, and round-trips AWARE → manifest → AWARE to identical verdicts. Rego and Cedar are not evaluated, and OPA stays optional.
 
 ### What's new in v2.11.0
 

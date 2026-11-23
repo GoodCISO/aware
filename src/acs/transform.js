@@ -137,6 +137,68 @@ function validateTransformPath(path) {
 }
 
 /**
+ * Replace the value at a path inside a container, returning a NEW container.
+ *
+ * The recursion rebuilds the path from the leaf upward, so a nested array
+ * inside an object (or an object inside an array) is handled uniformly.
+ * Nothing is mutated in place: every level is copied.
+ *
+ * @param {*} container - The container holding the next segment.
+ * @param {Array<string|number>} segments - The remaining segments.
+ * @param {*} newValue - The replacement value for the final segment.
+ * @returns {{ok: true, value: *}|{ok: false, reason: string, message: string}}
+ *   The new container, or the failure.
+ */
+function replaceIn(container, segments, newValue) {
+  const segment = segments[0];
+
+  if (Array.isArray(container)) {
+    if (typeof segment !== 'number' || segment >= container.length) {
+      return {
+        ok: false,
+        reason: 'runtime_error:transform_invalid',
+        message: 'Transform path does not resolve against the policy target.',
+      };
+    }
+    const copy = container.slice();
+    if (segments.length === 1) {
+      copy[segment] = newValue;
+      return { ok: true, value: copy };
+    }
+    const child = replaceIn(copy[segment], segments.slice(1), newValue);
+    if (!child.ok) return child;
+    copy[segment] = child.value;
+    return { ok: true, value: copy };
+  }
+
+  if (container === null || typeof container !== 'object') {
+    return {
+      ok: false,
+      reason: 'runtime_error:transform_invalid',
+      message: 'Transform path does not resolve against the policy target.',
+    };
+  }
+
+  if (typeof segment !== 'string' || !Object.prototype.hasOwnProperty.call(container, segment)) {
+    return {
+      ok: false,
+      reason: 'runtime_error:transform_invalid',
+      message: 'Transform path does not resolve against the policy target.',
+    };
+  }
+
+  const copy = { ...container };
+  if (segments.length === 1) {
+    copy[segment] = newValue;
+    return { ok: true, value: copy };
+  }
+  const child = replaceIn(copy[segment], segments.slice(1), newValue);
+  if (!child.ok) return child;
+  copy[segment] = child.value;
+  return { ok: true, value: copy };
+}
+
+/**
  * Apply a transform to a policy target value.
  *
  * The transformation is confined to the policy target. The snapshot, the
@@ -150,123 +212,18 @@ function validateTransformPath(path) {
  */
 function applyTransform(targetValue, segments, newValue) {
   if (segments.length === 0) {
+    // The whole target is replaced.
     return { ok: true, value: newValue };
   }
 
-  // Walk to the parent of the final segment, creating nothing. A path that
-  // does not resolve is a host-side failure (host_error:transform_invalid
-  // per AGENT-HOOKS-0.1 section 5.2). The adapter reports it with the
-  // registered runtime reason it can use; the host surfaces host_error.
-  const parentSegments = segments.slice(0, -1);
-  const last = segments[segments.length - 1];
-
-  let parent = targetValue;
-  for (const segment of parentSegments) {
-    if (parent === null || typeof parent !== 'object') {
-      return {
-        ok: false,
-        reason: 'runtime_error:transform_invalid',
-        message: 'Transform path does not resolve against the policy target.',
-      };
-    }
-    if (Array.isArray(parent)) {
-      if (typeof segment !== 'number' || segment >= parent.length) {
-        return {
-          ok: false,
-          reason: 'runtime_error:transform_invalid',
-          message: 'Transform path does not resolve against the policy target.',
-        };
-      }
-      parent = parent[segment];
-    } else {
-      if (typeof segment !== 'string' || !Object.prototype.hasOwnProperty.call(parent, segment)) {
-        return {
-          ok: false,
-          reason: 'runtime_error:transform_invalid',
-          message: 'Transform path does not resolve against the policy target.',
-        };
-      }
-      parent = parent[segment];
-    }
-  }
-
-  if (parent === null || typeof parent !== 'object') {
-    return {
-      ok: false,
-      reason: 'runtime_error:transform_invalid',
-      message: 'Transform path does not resolve against the policy target.',
-    };
-  }
-
-  // Copy so the caller's original target is never mutated in place.
-  const next = Array.isArray(parent) ? parent.slice() : { ...parent };
-
-  if (Array.isArray(next)) {
-    if (typeof last !== 'number') {
-      return {
-        ok: false,
-        reason: 'runtime_error:transform_invalid',
-        message: 'Transform path segment does not address an array element.',
-      };
-    }
-    if (last >= next.length) {
-      return {
-        ok: false,
-        reason: 'runtime_error:transform_invalid',
-        message: 'Transform path does not resolve against the policy target.',
-      };
-    }
-    next[last] = newValue;
-  } else {
-    if (typeof last !== 'string') {
-      return {
-        ok: false,
-        reason: 'runtime_error:transform_invalid',
-        message: 'Transform path segment does not address an object member.',
-      };
-    }
-    // ACS SPEC section 14: "A `path` that does not resolve against the
-    // policy target ... is found when the host applies the transform and
-    // fails closed there with `host_error:transform_invalid`". A member that
-    // is absent does not resolve. The transform REPLACES a value at an
-    // existing location; it does not create one. Failing closed here is
-    // deliberate: a transform that silently added a field could write a
-    // member the policy never named.
-    if (!Object.prototype.hasOwnProperty.call(next, last)) {
-      return {
-        ok: false,
-        reason: 'runtime_error:transform_invalid',
-        message: 'Transform path does not resolve against the policy target.',
-      };
-    }
-    next[last] = newValue;
-  }
-
-  // Rebuild the root with the new parent in place.
-  const rootSegments = segments.slice(0, -1);
-  let rebuilt = next;
-  for (let i = rootSegments.length - 1; i >= 0; i -= 1) {
-    const segment = rootSegments[i];
-    const container = Array.isArray(targetValue) ? targetValue : targetValue;
-    if (container === null || typeof container !== 'object') {
-      return {
-        ok: false,
-        reason: 'runtime_error:transform_invalid',
-        message: 'Transform path does not resolve against the policy target.',
-      };
-    }
-    if (Array.isArray(container)) {
-      const copy = container.slice();
-      copy[segment] = rebuilt;
-      rebuilt = copy;
-    } else {
-      const copy = { ...container };
-      copy[segment] = rebuilt;
-      rebuilt = copy;
-    }
-  }
-
-  return { ok: true, value: rebuilt };
+  // ACS SPEC section 14: "A `path` that does not resolve against the
+  // policy target ... is found when the host applies the transform and
+  // fails closed there with `host_error:transform_invalid`". A member that
+  // is absent does not resolve. The transform REPLACES a value at an
+  // existing location; it does not create one. Failing closed here is
+  // deliberate: a transform that silently added a field could write a
+  // member the policy never named.
+  return replaceIn(targetValue, segments, newValue);
 }
 
 /**
@@ -299,6 +256,24 @@ function resolveTransform(transformBody, targetValue) {
       verdict: failClosed(
         'runtime_error:policy_output_invalid',
         'Transform body is missing a path or value member.',
+      ),
+    };
+  }
+
+  // The transform body has exactly two members. ACS SPEC section 13: "Before
+  // constructing a typed verdict, normalization MUST reject unknown members
+  // at the policy-output root, in each `warnings` entry, and in `transform`,
+  // with `runtime_error:policy_output_invalid`. It MUST NOT discard these
+  // members and validate only the remaining fields."
+  const unknown = Object.keys(transformBody).filter((k) => k !== 'path' && k !== 'value');
+  if (unknown.length > 0) {
+    return {
+      ok: false,
+      reason: 'runtime_error:policy_output_invalid',
+      message: 'Transform body carries an unknown member.',
+      verdict: failClosed(
+        'runtime_error:policy_output_invalid',
+        'Transform body carries an unknown member.',
       ),
     };
   }

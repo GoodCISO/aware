@@ -50,20 +50,52 @@ const ApprovalOutcome = Object.freeze({
 const DEFAULT_APPROVAL_TTL_MS = 15 * 60 * 1000;
 
 /**
- * Build the context identity for an approval request.
+ * Compute the context identity for an approval request.
  *
  * When an identity provider is declared, the identity is a content-derived
  * digest over the context shown to the approver. That is what makes an
  * approval obtained for one content unusable against another content
  * (AGENT-HOOKS-0.1 section 10.1).
  *
+ * THE CANONICAL FORM
+ * ------------------
+ * The digest MUST cover the whole context, including nested values. A
+ * top-level-only serialisation would drop every nested member, so an
+ * approval granted for one tool argument could be replayed against a
+ * different argument. That is precisely the attack the echo rule exists to
+ * prevent, so the serialisation here sorts object keys at EVERY level.
+ *
  * @param {Object} context - The context presented to the approver.
  * @returns {string} A `sha256:<hex>` context identity.
  */
 function computeContextIdentity(context) {
-  const canonical = JSON.stringify(context === undefined ? null : context, Object.keys(context || {}).sort());
-  const digest = crypto.createHash('sha256').update(canonical).digest('hex');
+  const canonical = canonicalise(context === undefined ? null : context);
+  const digest = crypto.createHash('sha256').update(canonical, 'utf8').digest('hex');
   return `sha256:${digest}`;
+}
+
+/**
+ * Canonical JSON serialisation with sorted keys at every level.
+ *
+ * The ordering must be stable across processes, so the keys are sorted by
+ * their UTF-16 code units, which is what JSON.stringify does for an object
+ * literal's own keys.
+ *
+ * @param {*} value - The value to serialise.
+ * @returns {string} The canonical form.
+ */
+function canonicalise(value) {
+  if (value === null || typeof value !== 'object') {
+    return JSON.stringify(value === undefined ? null : value);
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map(canonicalise).join(',')}]`;
+  }
+  const keys = Object.keys(value).sort();
+  const members = keys.map(
+    (key) => `${JSON.stringify(key)}:${canonicalise(value[key])}`,
+  );
+  return `{${members.join(',')}}`;
 }
 
 /**
@@ -145,7 +177,14 @@ class ApprovalSeam {
    */
   createRequest(input) {
     const { verdict, interventionPoint, context, sessionId } = input;
-    const contextIdentity = input.contextIdentity || computeContextIdentity(context);
+    // A null context identity is MEANINGFUL, not "absent". AGENT-HOOKS-0.1
+    // section 10.1: a host whose identity provider is null binds approvals
+    // by request and response correlation only, and "null echoes as null".
+    // So an explicit null must be preserved, and only an UNDEFINED identity
+    // is computed from the context.
+    const contextIdentity = input.contextIdentity === undefined
+      ? computeContextIdentity(context)
+      : input.contextIdentity;
     const id = `acs-appr-${crypto.randomUUID()}`;
     const now = Date.now();
 

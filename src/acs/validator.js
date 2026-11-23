@@ -199,6 +199,10 @@ function assertSupported(schema, at) {
 function validate(instance, schema, root, at = '$') {
   const rootDoc = root === undefined ? schema : root;
   const errors = [];
+  // Refuse a schema this validator does not fully implement. A validator
+  // that ignores an unknown keyword passes documents it never really
+  // checked, which is the same fail-open class as ACS issue #83.
+  assertSupported(schema, at);
   validateInto(instance, schema, rootDoc, at, errors);
   return { valid: errors.length === 0, errors };
 }
@@ -307,7 +311,10 @@ function validateInto(instance, schema, root, at, errors) {
  * @param {Array} errors - Accumulator for errors.
  */
 function validateString(value, schema, at, errors) {
-  // JSON Schema counts Unicode code points, not UTF-16 units.
+  // JSON Schema counts Unicode CODE POINTS, not UTF-16 code units. An
+  // astral character such as an emoji is two UTF-16 units but one code
+  // point, so a naive value.length would reject a string that satisfies the
+  // schema.
   const length = Array.from(value).length;
   if (typeof schema.minLength === 'number' && length < schema.minLength) {
     errors.push({ path: at, message: `must be at least ${schema.minLength} characters` });

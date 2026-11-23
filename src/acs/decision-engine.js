@@ -246,12 +246,58 @@ class AcsDecisionEngine {
     // --- Step 1: validate the canonical policy input.
     const validation = this.validatePolicyInput(policyInput);
     if (!validation.ok) {
+      // Use the reason the validator produced rather than hard-coding one,
+      // so the reserved reason stays specific to the actual failure.
       return this._failResult(
-        'runtime_error:policy_output_invalid',
+        validation.verdict.reason,
         validation.verdict.message,
         input,
         mode,
         validation.verdict,
+      );
+    }
+
+    // --- Step 2a: the kill switch.
+    //
+    // The kill switch short-circuits BEFORE everything else. A revoked
+    // agent is denied regardless of what any policy says, and regardless
+    // of which intervention point is being evaluated.
+    //
+    // It is consulted UNCONDITIONALLY. Gating this check on the presence
+    // of an agent id would mean that a caller who omits the id skips the
+    // gate entirely, and a revoked agent would then be allowed. The HTTP
+    // transport is a separate entry point where the id can be omitted, so
+    // that is a real path, not a theoretical one.
+    //
+    // When no agent id is available the gate cannot be evaluated, and a
+    // gate that cannot be evaluated must not be treated as a gate that
+    // passed. The evaluation fails closed.
+    try {
+      if (!input.agentId) {
+        return this._failResult(
+          'runtime_error:policy_invocation_failed',
+          'No agent identity was supplied, so the kill switch could not be consulted.',
+          input,
+          mode,
+        );
+      }
+      if (this.getKillSwitch().isRevoked(input.agentId)) {
+        const verdict = {
+          decision: 'deny',
+          reason: POLICY_REASONS.KILL_SWITCH_ACTIVE,
+          message: 'The agent is under an active kill signal.',
+        };
+        return this._successResult(verdict, input, mode, null);
+      }
+    } catch (err) {
+      // A kill-switch probe that cannot answer must not become a
+      // permissive one. This is the issue-#83 class: a gate that silently
+      // stops firing. Fail closed.
+      return this._failResult(
+        'runtime_error:policy_invocation_failed',
+        'The kill-switch probe could not be consulted.',
+        input,
+        mode,
       );
     }
 
@@ -261,6 +307,9 @@ class AcsDecisionEngine {
     // other five are accepted and answered with a well-formed verdict, but
     // AWARE holds no policy for them yet. They are NOT a failure: the spec
     // requires a well-formed verdict for every intervention point.
+    //
+    // This check runs AFTER the kill switch, so an unenforced point never
+    // returns an unconditional allow for a revoked agent.
     if (!ENFORCED_INTERVENTION_POINTS.includes(policyInput.intervention_point)) {
       const verdict = {
         decision: 'allow',
@@ -274,33 +323,6 @@ class AcsDecisionEngine {
         ],
       };
       return this._successResult(verdict, input, mode, null);
-    }
-
-    // --- Step 2a: the kill switch.
-    //
-    // The kill switch short-circuits BEFORE policy evaluation. A revoked
-    // agent is denied regardless of what any policy says.
-    if (input.agentId) {
-      try {
-        if (this.getKillSwitch().isRevoked(input.agentId)) {
-          const verdict = {
-            decision: 'deny',
-            reason: POLICY_REASONS.KILL_SWITCH_ACTIVE,
-            message: 'The agent is under an active kill signal.',
-          };
-          return this._successResult(verdict, input, mode, null);
-        }
-      } catch (err) {
-        // A kill-switch probe that cannot answer must not become a
-        // permissive one. This is the issue-#83 class: a gate that silently
-        // stops firing. Fail closed.
-        return this._failResult(
-          'runtime_error:policy_invocation_failed',
-          'The kill-switch probe could not be consulted.',
-          input,
-          mode,
-        );
-      }
     }
 
     // --- Step 2b: AWARE policy evaluation.
@@ -369,11 +391,58 @@ class AcsDecisionEngine {
     // SPEC section 14: "`transform` is the only form of value rewriting a
     // verdict can request." So when the AWARE decision carries a
     // transform body, the verdict IS a transform verdict.
+    //
+    // BUT a transform body must NEVER override an explicit non-allow
+    // policy decision. A verdict of `transform` PERMITS the action (the
+    // host applies the replacement and proceeds), so letting a transform
+    // body override a `DENY` converts a deny into an allow. That is the
+    // fail-open class ACS section 21 forbids and the issue-#83 pattern
+    // this branch exists to defend against.
+    //
+    // A decision that is both a deny and a transform is AMBIGUOUS, so it
+    // fails closed rather than resolving it in the permissive direction.
     let verdict;
     try {
-      const isTransform = awareDecision.transform
-        && typeof awareDecision.transform === 'object';
+      // A transform body that is PRESENT must be well formed. Silently
+      // dropping a malformed one would let the host proceed with the
+      // ORIGINAL, untransformed target under an allow -- a fail-open
+      // transform, exactly the shape of the issue-#83 class.
+      const transformPresent = awareDecision.transform !== undefined
+        && awareDecision.transform !== null;
+      const hasTransform = transformPresent
+        && typeof awareDecision.transform === 'object'
+        && !Array.isArray(awareDecision.transform);
+
+      if (transformPresent && !hasTransform) {
+        return this._failResult(
+          'runtime_error:policy_output_invalid',
+          'The policy decision carries a malformed transform body; the transform was rejected.',
+          input,
+          mode,
+        );
+      }
+
+      const policyPermits = awareDecision.decision === 'ALLOW'
+        || awareDecision.decision === 'AUDIT'
+        || awareDecision.decision === 'NO_POLICY';
+
+      if (hasTransform && !policyPermits) {
+        return this._failResult(
+          'runtime_error:policy_output_invalid',
+          'The policy decision carries both a denial and a transform; the deny stands.',
+          input,
+          mode,
+        );
+      }
+
+      const isTransform = hasTransform && policyPermits;
+      // Pass the AWARE decision's OWN members through, plus the normalised
+      // extras the adapter adds. Building a fresh object from selected
+      // fields would silently DISCARD an unknown member before the
+      // normaliser could reject it, and ACS SPEC section 13 requires the
+      // normaliser to reject unknown members rather than discard them.
       verdict = normalizeVerdict({
+        ...awareDecision,
         decision: isTransform ? 'transform' : awareDecision.decision,
         reason: awareDecision.reason,
         message: this._verdictMessage(awareDecision),
@@ -381,8 +450,14 @@ class AcsDecisionEngine {
         transform: isTransform ? awareDecision.transform : undefined,
       });
     } catch (err) {
+      // A PolicyOutputError means the policy output violated the
+      // normalisation contract, which ACS SPEC section 13 requires to fail
+      // closed with runtime_error:policy_output_invalid.
+      const reason = err && err.name === 'PolicyOutputError'
+        ? 'runtime_error:policy_output_invalid'
+        : 'runtime_error:policy_invocation_failed';
       return this._failResult(
-        'runtime_error:policy_invocation_failed',
+        reason,
         'The AWARE decision could not be normalised into an ACS verdict.',
         input,
         mode,

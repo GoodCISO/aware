@@ -51,14 +51,14 @@ work landed.
 node --test --test-force-exit 'test/unit/**/*.test.js'
 
                  BEFORE      AFTER
-tests              877        996      (+119 ACS tests)
-pass               840        959      (+119)
+tests              877       1015      (+138 ACS tests)
+pass               840        978      (+138)
 fail                37         37      (unchanged)
 ```
 
 **The failing set is byte-identical.** The 73 failing test-case lines were
 diffed before and after; the set difference is empty in both directions. So
-every one of the 119 new tests passes and nothing that passed before
+every one of the 138 new tests passes and nothing that passed before
 fails now.
 
 ```

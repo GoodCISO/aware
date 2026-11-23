@@ -617,3 +617,57 @@ adapter consumes ACS manifests; it does not implement a policy language.
 Phase 3's "Rego policy bundles evaluated through OPA" is therefore
 **deferred to Phase 3** and gated behind an optional dependency, per the
 task's instruction to keep OPA optional.
+
+---
+
+## 13. Adversarial review findings and their fixes
+
+An adversarial review of this branch found **13 defects**, of which **2 were
+critical and 4 were high**. Every one was a **fail-open** defect: the
+adapter allowed something it should have denied. All 13 are fixed, and each
+has a named regression test in
+`test/unit/acs/adversarial-review.test.js` so it cannot come back.
+
+| ID | Severity | Defect | Fix |
+| --- | --- | --- | --- |
+| CRITICAL-1 | Critical | A policy `DENY` that also carried a `transform` body was emitted as a `transform` verdict. `transform` PERMITS, so a deny became an allow. | The transform body may only accompany a permitting policy decision. A deny-with-transform is ambiguous and fails closed with `runtime_error:policy_output_invalid`. |
+| CRITICAL-2 | Critical | The kill-switch check was gated on the truthiness of `agentId`, so a caller that omitted it skipped the gate. The HTTP transport is a separate entry point where the id can be omitted. | The kill switch is consulted unconditionally, and with no agent identity the evaluation fails closed rather than allowing. |
+| HIGH-1 | High | A malformed (non-object) transform body was silently dropped, so the decision fell through to an allow and the host executed the ORIGINAL, untransformed target. | A transform that is PRESENT must be a well-formed object. A malformed one fails closed with `runtime_error:policy_output_invalid`. |
+| HIGH-2 | High | The unenforced-intervention-point branch returned an unconditional allow BEFORE the kill-switch check, so five of eight points allowed a revoked agent. | The kill-switch check now runs first. |
+| HIGH-3 | High | Normalisation silently discarded unknown policy-output members. ACS SPEC section 13 requires rejecting them. | The normaliser rejects an unknown member at the policy-output root and in each `warnings` entry, with `runtime_error:policy_output_invalid`. The adapter passes the AWARE decision's own members through so the check can see them. |
+| HIGH-4 | High | Normalisation accepted a `reason` or `warnings[].reason` carrying a reserved `runtime_error:` / `host_error:` prefix, so a policy could masquerade as a runtime failure. | Reserved prefixes and the runtime-owned `evidence_truncated` reason are rejected. |
+| MEDIUM-1 | Medium | The validator declared `unevaluatedProperties` and `unevaluatedItems` as supported but implemented neither, so a schema using them admitted arbitrary extra properties. | Both keywords are now implemented, with the annotation collection JSON Schema 2020-12 defines across `allOf`, `anyOf`, `oneOf`, `if`/`then`/`else` and `$ref`. |
+| MEDIUM-2 | Medium | `deepEqual` compared an array and a plain object as equal when both had zero keys, so `const: {}` accepted `[]`. | An array is never equal to a plain object. |
+| MEDIUM-3 | Medium | An approval request could be resolved more than once, so a request rejected earlier could be re-resolved to an approval. | A request resolves once. A second resolution fails closed and the first resolution stands. |
+| MEDIUM-4 | Medium | The echo rule compared `contextIdentity` without checking its type. | A resolution whose identity is neither a string nor null is rejected as malformed. |
+| MEDIUM-5 | Medium | In `evaluate_only` the host adapter still returned an applied transformed target, and `permits` did not reflect that the verdict was not binding. | In `evaluate_only` the transform is validated but not applied, and a new `mayExecute` flag is false outside `enforce`. |
+| LOW-1 | Low | The policy-input validation failure hard-coded its reserved reason instead of using the one the validator produced. | The validator's own reason is used. |
+
+### A note on MEDIUM-1
+
+The first fix for MEDIUM-1 was to REMOVE `unevaluatedProperties` from the
+validator's supported set, so a schema using it would be refused. That is
+the fail-closed behaviour, and the validator's own guard proved it worked:
+the pinned interception-record schema USES `unevaluatedProperties`, so
+receipt validation immediately failed with `schema_unsupported_keyword`.
+
+That is the guard earning its keep. The keyword was then implemented
+properly instead, and a regression test asserts the pinned receipt schema
+still validates.
+
+### The lesson these findings encode
+
+Every finding in this list is the same shape: **a path where something was
+silently dropped, defaulted, or skipped**. The issue-#83 class is a
+specific instance of it — a gate that stopped firing and nobody noticed.
+
+The branch's answer is threefold:
+
+1. One fail-closed constructor, `src/acs/fail-closed.js`, that refuses a
+   reason that is not registered.
+2. A fault-injection suite that drives every error path and asserts a deny.
+3. A **source scan** that fails if any module in `src/acs/` catches an error
+   and returns an `allow`.
+
+The third is the one that generalises. A behavioural test only sees the
+paths it injects; the scan sees the code.

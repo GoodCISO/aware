@@ -100,6 +100,10 @@ function deepEqual(a, b) {
   if (Array.isArray(a) && Array.isArray(b)) {
     return a.length === b.length && a.every((v, i) => deepEqual(v, b[i]));
   }
+  // An array is not equal to a plain object. Without this check, `[]` and
+  // `{}` both have zero keys and would compare equal, so a `const: {}` or an
+  // `enum` entry would accept the wrong JSON type.
+  if (Array.isArray(a) !== Array.isArray(b)) return false;
   if (a && b && typeof a === 'object' && typeof b === 'object') {
     const ka = Object.keys(a);
     const kb = Object.keys(b);
@@ -402,6 +406,28 @@ function validateArray(value, schema, root, at, errors) {
     });
     if (!ok) errors.push({ path: at, message: 'must contain at least one matching item' });
   }
+  // unevaluatedItems applies to the items that NO subschema evaluated.
+  // `prefixItems` evaluates the indices it covers, and `items` evaluates
+  // the rest, so only the tail beyond both is unevaluated.
+  if (schema.unevaluatedItems !== undefined) {
+    const evaluated = new Set();
+    collectEvaluated(schema, root, evaluated);
+    const prefixCount = Array.isArray(schema.prefixItems) ? schema.prefixItems.length : 0;
+    const itemsCoversRest = schema.items !== undefined
+      && typeof schema.items === 'object';
+    for (let i = 0; i < value.length; i += 1) {
+      if (evaluated.has(i)) continue;
+      if (itemsCoversRest && i >= prefixCount) continue;
+      if (schema.unevaluatedItems === false) {
+        errors.push({
+          path: `${at}[${i}]`,
+          message: 'is not evaluated by any subschema and unevaluatedItems is false',
+        });
+      } else if (typeof schema.unevaluatedItems === 'object') {
+        validateInto(value[i], schema.unevaluatedItems, root, `${at}[${i}]`, errors);
+      }
+    }
+  }
 }
 
 /**
@@ -465,6 +491,27 @@ function validateObject(value, schema, root, at, errors) {
     }
   }
 
+  // unevaluatedProperties applies to the properties that NO subschema
+  // evaluated. The annotation set is collected across every applicator, so
+  // a property named by a `properties` in an `allOf` branch counts as
+  // evaluated.
+  if (schema.unevaluatedProperties !== undefined) {
+    const evaluated = new Set();
+    collectEvaluated(schema, root, evaluated);
+    const evaluatedNames = evaluatedPropertyNames(value, evaluated);
+    for (const name of keys) {
+      if (evaluatedNames.has(name)) continue;
+      if (schema.unevaluatedProperties === false) {
+        errors.push({
+          path: `${at}.${name}`,
+          message: 'is not evaluated by any subschema and unevaluatedProperties is false',
+        });
+      } else if (typeof schema.unevaluatedProperties === 'object') {
+        validateInto(value[name], schema.unevaluatedProperties, root, `${at}.${name}`, errors);
+      }
+    }
+  }
+
   if (schema.additionalProperties !== undefined) {
     const known = new Set(Object.keys(schema.properties || {}));
     const patternKeys = Object.keys(schema.patternProperties || {});
@@ -479,6 +526,108 @@ function validateObject(value, schema, root, at, errors) {
       }
     }
   }
+}
+
+/**
+ * The set of instance locations a schema "evaluated".
+ *
+ * `unevaluatedProperties` and `unevaluatedItems` apply to the properties
+ * and items that NO subschema evaluated. JSON Schema 2020-12 defines this
+ * by collecting annotations from every successful subschema: `properties`,
+ * `patternProperties`, `additionalProperties`, `items`, `prefixItems` and
+ * `contains` all annotate the names or indices they applied to, and the
+ * annotation is carried out of `allOf`, `anyOf`, `oneOf`, `if`/`then`/`else`
+ * and `$ref`.
+ *
+ * The collector below tracks that. It is a Set of the evaluated property
+ * names for an object, or the evaluated item indices for an array.
+ *
+ * @param {Object} schema - The schema.
+ * @param {string} root - The $ref root document.
+ * @param {Set<string|number>} evaluated - The accumulator.
+ * @returns {void}
+ */
+function collectEvaluated(schema, root, evaluated) {
+  if (schema === true || schema === false) return;
+  if (!schema || typeof schema !== 'object') return;
+
+  if (typeof schema.$ref === 'string') {
+    try {
+      collectEvaluated(resolveRef(root, schema.$ref), root, evaluated);
+    } catch (err) {
+      // A $ref that does not resolve is reported by the validation pass.
+      return;
+    }
+    const siblings = { ...schema };
+    delete siblings.$ref;
+    if (Object.keys(siblings).length > 0) {
+      collectEvaluated(siblings, root, evaluated);
+    }
+    return;
+  }
+
+  if (schema.properties && typeof schema.properties === 'object') {
+    for (const name of Object.keys(schema.properties)) evaluated.add(name);
+  }
+  if (schema.patternProperties && typeof schema.patternProperties === 'object') {
+    for (const pattern of Object.keys(schema.patternProperties)) {
+      // The pattern itself is the annotation; the matching names are
+      // resolved by the caller against the instance.
+      evaluated.add(`__pattern__:${pattern}`);
+    }
+  }
+  if (schema.additionalProperties !== undefined) {
+    evaluated.add('__additionalProperties__');
+  }
+  if (schema.items !== undefined && typeof schema.items === 'object') {
+    evaluated.add('__items__');
+  }
+  if (Array.isArray(schema.prefixItems)) {
+    schema.prefixItems.forEach((sub, i) => evaluated.add(i));
+  }
+  if (schema.contains !== undefined) {
+    evaluated.add('__contains__');
+  }
+
+  for (const keyword of ['allOf', 'anyOf', 'oneOf']) {
+    if (Array.isArray(schema[keyword])) {
+      for (const sub of schema[keyword]) collectEvaluated(sub, root, evaluated);
+    }
+  }
+  if (schema.if !== undefined) {
+    collectEvaluated(schema.if, root, evaluated);
+    if (schema.then !== undefined) collectEvaluated(schema.then, root, evaluated);
+    if (schema.else !== undefined) collectEvaluated(schema.else, root, evaluated);
+  }
+}
+
+/**
+ * Resolve the evaluated set into the concrete property names it covers.
+ *
+ * @param {Object} instance - The object being validated.
+ * @param {Set<string|number>} evaluated - The collected annotations.
+ * @returns {Set<string>} The evaluated property names.
+ */
+function evaluatedPropertyNames(instance, evaluated) {
+  const names = new Set();
+  for (const entry of evaluated) {
+    if (typeof entry !== 'string') continue;
+    if (entry.startsWith('__pattern__:')) {
+      const pattern = entry.slice('__pattern__:'.length);
+      const re = new RegExp(pattern, 'u');
+      for (const name of Object.keys(instance)) {
+        if (re.test(name)) names.add(name);
+      }
+    } else if (entry.startsWith('__')) {
+      // __additionalProperties__ means every remaining name was evaluated.
+      if (entry === '__additionalProperties__') {
+        for (const name of Object.keys(instance)) names.add(name);
+      }
+    } else {
+      names.add(entry);
+    }
+  }
+  return names;
 }
 
 /**

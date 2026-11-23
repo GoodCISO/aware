@@ -270,7 +270,50 @@ class ApprovalSeam {
       };
     }
 
+    // An approval request is resolved ONCE. A request that has already
+    // been rejected or left unresolved must not be re-resolved to an
+    // approval: that would let a rejected action be replayed into a
+    // permitted one. A second resolution fails closed and the FIRST
+    // resolution stands.
+    if (request.status !== ApprovalOutcome.UNRESOLVED) {
+      this._emit({
+        type: 'approval_already_resolved',
+        requestId,
+        interventionPoint: request.interventionPoint,
+        status: request.status,
+        timestamp: new Date().toISOString(),
+      });
+      return {
+        ok: false,
+        verdict: failClosed(
+          'runtime_error:approval_resolver_failed',
+          'The approval request has already been resolved.',
+        ),
+        reason: 'runtime_error:approval_resolver_failed',
+        request,
+      };
+    }
+
     // The echo rule. `null` echoes as `null`, so the comparison is exact.
+    // The identity must also be a string or null: an object or a number
+    // would compare unequal to any real identity and could never echo, but
+    // it must be REJECTED explicitly rather than merely failing the
+    // comparison, so the failure is reported as a malformed resolution.
+    if (
+      resolution.contextIdentity !== null
+      && typeof resolution.contextIdentity !== 'string'
+    ) {
+      return {
+        ok: false,
+        verdict: failClosed(
+          'runtime_error:approval_resolver_failed',
+          'The approval resolution carries a context identity that is neither a string nor null.',
+        ),
+        reason: 'runtime_error:approval_resolver_failed',
+        request,
+      };
+    }
+
     if (resolution.contextIdentity !== request.contextIdentity) {
       request.status = ApprovalOutcome.UNRESOLVED;
       this._emit({

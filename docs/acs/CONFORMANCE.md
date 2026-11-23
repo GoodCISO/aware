@@ -79,6 +79,16 @@ policy that should have denied returned `allow`, silently.
 | The kill-switch probe throws | Yes | same |
 | The approval seam throws while creating a request | Yes | same |
 | The kill switch is active | Yes | `test/unit/acs/decision-engine.test.js` — "a kill switch signal denies before any policy is consulted" |
+| No agent identity, so the kill switch cannot be evaluated | Yes | `test/unit/acs/adversarial-review.test.js` — "regression CRITICAL-2: the kill switch must be consulted when no agent id is supplied" |
+| A revoked agent at an unenforced intervention point | Yes | `test/unit/acs/adversarial-review.test.js` — "regression HIGH-2: a revoked agent is denied at an UNENFORCED intervention point" |
+| A policy `DENY` that also carries a transform | Yes | `test/unit/acs/adversarial-review.test.js` — "regression CRITICAL-1: a DENY carrying a transform must NOT become a permitting transform" |
+| A malformed (non-object) transform body | Yes | `test/unit/acs/adversarial-review.test.js` — "regression HIGH-1: a malformed transform body must fail closed, not be dropped" |
+| An unknown member on the policy output | Yes | `test/unit/acs/adversarial-review.test.js` — "regression HIGH-3: an unknown member on the policy output must be rejected" |
+| A reserved-prefixed `reason` or `warnings[].reason` | Yes | `test/unit/acs/adversarial-review.test.js` — "regression HIGH-4: a reserved-prefixed reason must be rejected" |
+| The runtime-owned `evidence_truncated` warning reason | Yes | `test/unit/acs/adversarial-review.test.js` — "regression HIGH-4: a warnings entry may not use the runtime-owned evidence_truncated reason" |
+| An unknown member on a `warnings` entry | Yes | `test/unit/acs/adversarial-review.test.js` — "regression HIGH-3: a warnings entry with an unknown member must be rejected" |
+| A re-resolution of an already-resolved approval | Yes | `test/unit/acs/adversarial-review.test.js` — "regression MEDIUM-3: a resolved approval must not be re-resolved to an approval" |
+| A non-string approval context identity | Yes | `test/unit/acs/adversarial-review.test.js` — "regression MEDIUM-4: a non-string context identity must be rejected" |
 | A malformed policy input (7 shapes) | Yes | `test/unit/acs/fail-closed.test.js` — "a malformed policy input denies" |
 | An expired approval | Yes | `test/unit/acs/fail-closed.test.js` — "an expired approval denies" |
 | A rejected approval | Yes | same suite — "a rejected approval denies" |
@@ -237,7 +247,7 @@ These are **not** implemented and are **not** claimed:
 ## 12. How to run these tests
 
 ```bash
-# The ACS suites. 119 tests.
+# The ACS suites. 138 tests.
 node --test 'test/unit/acs/*.test.js'
 
 # The whole unit suite.
@@ -248,8 +258,8 @@ npm test
 
 | Suite | Tests | Pass | Fail |
 | --- | --- | --- | --- |
-| `test/unit/acs/` | 119 | 119 | 0 |
-| `test/unit/**` (whole) | 996 | 959 | 37 |
+| `test/unit/acs/` | 138 | 138 | 0 |
+| `test/unit/**` (whole) | 1015 | 978 | 37 |
 | `test/integration/**` | 28 | 22 | 4 |
 
 **No regressions.** The whole unit suite went from 877 tests / 840 pass /

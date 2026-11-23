@@ -55,6 +55,125 @@ const POLICY_REASONS = Object.freeze({
 });
 
 /**
+ * The reserved prefixes a POLICY reason may never carry.
+ *
+ * ACS SPEC section 13: "MUST NOT start with `runtime_error:` or
+ * `host_error:`". The runtime owns that namespace, so a policy reason that
+ * uses it would be indistinguishable from a runtime failure.
+ */
+const RESERVED_REASON_PREFIXES = Object.freeze(['runtime_error:', 'host_error:']);
+
+/**
+ * The runtime-owned warning reason a policy may never emit.
+ *
+ * ACS SPEC section 13: a `warnings` entry reason "MUST NOT be the runtime
+ * owned `evidence_truncated` reason".
+ */
+const RUNTIME_OWNED_WARNING_REASON = 'evidence_truncated';
+
+/**
+ * The members a policy-output root may carry.
+ *
+ * ACS SPEC section 13 lists exactly these. Anything else MUST be rejected
+ * with `runtime_error:policy_output_invalid`, not discarded.
+ */
+const POLICY_OUTPUT_MEMBERS = Object.freeze([
+  'decision',
+  'reason',
+  'message',
+  'transform',
+  'warnings',
+  'approval',
+  'evidence',
+  'result_labels',
+]);
+
+/**
+ * The AWARE-internal members an AWARE policy decision legitimately carries.
+ *
+ * These are NOT policy-output members. They are the adapter's own inputs
+ * from the AWARE policy engine (src/policies/engine.js), and the adapter
+ * strips them before the verdict is emitted. They are allowed here so the
+ * "reject unknown members" rule does not fire on the adapter's own
+ * plumbing.
+ */
+const AWARE_INTERNAL_MEMBERS = Object.freeze([
+  'policyId',
+  'riskLevel',
+  'requiresApproval',
+]);
+
+/**
+ * The members a `warnings` entry may carry.
+ */
+const WARNING_ENTRY_MEMBERS = Object.freeze(['reason', 'message']);
+
+/**
+ * Raised when a policy output violates the normalisation contract.
+ *
+ * The decision engine maps this to a fail-closed verdict.
+ */
+class PolicyOutputError extends Error {
+  /**
+   * @param {string} message - What went wrong.
+   */
+  constructor(message) {
+    super(message);
+    this.name = 'PolicyOutputError';
+  }
+}
+
+/**
+ * Test whether a reason carries a reserved prefix.
+ *
+ * @param {*} reason - The reason to test.
+ * @returns {boolean} True when the reason is reserved.
+ */
+function hasReservedPrefix(reason) {
+  if (typeof reason !== 'string') return false;
+  return RESERVED_REASON_PREFIXES.some((prefix) => reason.startsWith(prefix));
+}
+
+/**
+ * Validate a reason against the reserved namespace.
+ *
+ * @param {*} reason - The reason to validate.
+ * @param {string} where - Where the reason came from, for the message.
+ * @returns {void}
+ * @throws {PolicyOutputError} When the reason is reserved.
+ */
+function assertReasonAllowed(reason, where) {
+  if (hasReservedPrefix(reason)) {
+    throw new PolicyOutputError(
+      `The ${where} carries a reserved prefix, which the runtime owns.`,
+    );
+  }
+}
+
+/**
+ * Reject unknown members on the policy output.
+ *
+ * ACS SPEC section 13: "normalization MUST reject unknown members at the
+ * policy-output root, in each `warnings` entry, and in `transform`, with
+ * `runtime_error:policy_output_invalid`. It MUST NOT discard these members
+ * and validate only the remaining fields."
+ *
+ * @param {Object} object - The object to check.
+ * @param {string[]} allowed - The permitted member names.
+ * @param {string} where - Where the object came from, for the message.
+ * @returns {void}
+ * @throws {PolicyOutputError} When an unknown member is present.
+ */
+function assertKnownMembers(object, allowed, where) {
+  const unknown = Object.keys(object).filter((key) => !allowed.includes(key));
+  if (unknown.length > 0) {
+    throw new PolicyOutputError(
+      `The ${where} carries an unknown member, which normalisation must reject.`,
+    );
+  }
+}
+
+/**
  * Normalise an AWARE decision into an ACS verdict.
  *
  * @param {Object} input - The normalisation input.
@@ -66,6 +185,9 @@ const POLICY_REASONS = Object.freeze({
  * @param {Array} [input.warnings] - Extra `warnings[]` entries.
  * @returns {{decision: string, reason: string, message: string, warnings?: Array, approval?: Object, transform?: Object}}
  *   The ACS verdict.
+ * @throws {PolicyOutputError} When the policy output violates the
+ *   normalisation contract. The decision engine maps this to a fail-closed
+ *   verdict.
  * @throws {Error} When the AWARE decision is not one of the four known values.
  *   An unknown decision is a programming error, not a runtime condition.
  */
@@ -74,6 +196,39 @@ function normalizeVerdict(input) {
     throw new Error('normalizeVerdict requires an input object');
   }
   const { decision, reason, message, approval, transform, warnings } = input;
+
+  // Reject unknown members at the policy-output root BEFORE anything else.
+  // The member set is the one the spec declares, plus the AWARE-internal
+  // members the adapter's own plumbing carries.
+  assertKnownMembers(
+    { ...input, decision: undefined },
+    [...POLICY_OUTPUT_MEMBERS, ...AWARE_INTERNAL_MEMBERS],
+    'policy output root',
+  );
+
+  // A reason may never carry a reserved prefix.
+  assertReasonAllowed(reason, 'reason');
+
+  // Each warnings entry carries exactly {reason, message}, and its reason
+  // may never carry a reserved prefix or be the runtime-owned
+  // evidence_truncated reason.
+  if (warnings !== undefined && warnings !== null) {
+    if (!Array.isArray(warnings)) {
+      throw new PolicyOutputError('The warnings member is not an array.');
+    }
+    for (const entry of warnings) {
+      if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+        throw new PolicyOutputError('A warnings entry is not an object.');
+      }
+      assertKnownMembers(entry, WARNING_ENTRY_MEMBERS, 'warnings entry');
+      assertReasonAllowed(entry.reason, 'warnings entry reason');
+      if (entry.reason === RUNTIME_OWNED_WARNING_REASON) {
+        throw new PolicyOutputError(
+          'A warnings entry reason uses the runtime-owned evidence_truncated reason.',
+        );
+      }
+    }
+  }
 
   const verdict = {};
 

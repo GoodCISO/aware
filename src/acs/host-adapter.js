@@ -100,10 +100,27 @@ class AcsHostResult {
       ? null
       : input.transformedPolicyTarget;
 
-    /** Whether the host may carry out the action. */
-    this.permits = input.verdict.decision === 'allow' || input.verdict.decision === 'transform';
     /** Whether the verdict is binding. False in evaluate_only. */
     this.enforced = input.mode === 'enforce';
+
+    /**
+     * Whether the HOST may carry out the action.
+     *
+     * This is the decision alone. In evaluate_only mode the decision is
+     * still computed and still recorded, but it is NOT binding, so the
+     * host must not treat it as a permission to proceed on its own. The
+     * `enforced` flag says which mode applied.
+     */
+    this.permits = input.verdict.decision === 'allow' || input.verdict.decision === 'transform';
+
+    /**
+     * Whether the host should ACT on the verdict.
+     *
+     * This is the flag a host that follows the documented pattern should
+     * branch on. It is false in evaluate_only mode, because the verdict
+     * there is a shadow record and not a permission.
+     */
+    this.mayExecute = this.enforced && this.permits;
   }
 }
 
@@ -287,15 +304,22 @@ class AcsHostSession {
     });
 
     // The runtime returns the transform UNAPPLIED. The HOST applies it.
+    //
+    // ACS SPEC section 14: "The runtime validates the transform in both
+    // modes and returns the `transform` verdict with its body unapplied.
+    // ... In `evaluate_only` mode the host validates the transform but
+    // applies none."
+    //
+    // So in evaluate_only the transform is still VALIDATED -- a malformed
+    // one still fails closed -- but the applied value is not handed back,
+    // because a shadow evaluation must not change what the host executes.
     let transformedPolicyTarget = null;
     if (evaluation.verdict.decision === 'transform' && evaluation.verdict.transform) {
       const resolved = resolveTransform(
         evaluation.verdict.transform,
         policyInput.policy_target.value,
       );
-      if (resolved.ok) {
-        transformedPolicyTarget = resolved.value;
-      } else {
+      if (!resolved.ok) {
         // The transform could not be applied. That is a HOST-side failure
         // (host_error:transform_invalid). The host must not carry out the
         // action with the untransformed target, so the result denies.
@@ -309,6 +333,9 @@ class AcsHostSession {
           interventionPoint,
           approvalRequestId: evaluation.approvalRequestId,
         });
+      }
+      if (evaluation.mode === 'enforce') {
+        transformedPolicyTarget = resolved.value;
       }
     }
 

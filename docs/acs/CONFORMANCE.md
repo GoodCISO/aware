@@ -237,18 +237,32 @@ These are **not** implemented and are **not** claimed:
 ## 12. How to run these tests
 
 ```bash
-# The ACS suites.
+# The ACS suites. 119 tests.
 node --test 'test/unit/acs/*.test.js'
 
 # The whole unit suite.
 npm test
 ```
 
-The pre-change baseline is recorded in `BASELINE.md`: **877 tests, 840
-pass, 37 fail**. The 37 failures are pre-existing and are caused by
-missing optional dependencies (`src/ui/node_modules`, and an out-of-tree
-`rl-pipeline` import), not by the ACS work. They fail identically before
-and after this branch.
+**Measured results on this branch** (`df9483f3` base, Node v26.13.0, macOS):
+
+| Suite | Tests | Pass | Fail |
+| --- | --- | --- | --- |
+| `test/unit/acs/` | 119 | 119 | 0 |
+| `test/unit/**` (whole) | 996 | 959 | 37 |
+| `test/integration/**` | 28 | 22 | 4 |
+
+**No regressions.** The whole unit suite went from 877 tests / 840 pass /
+37 fail to 996 / 959 / 37. The set of failing test cases is **identical**
+before and after — the 73 failing lines were diffed in both directions and
+the set difference is empty. The integration suite has the same failing set
+as the base commit, measured in a separate worktree.
+
+The 37 unit failures and 4 integration failures are pre-existing and
+environmental: missing optional dependencies (`src/ui/node_modules`, an
+out-of-tree `rl-pipeline` import) and missing deploy fixtures. They fail
+identically on `df9483f3` without any ACS code. `BASELINE.md` records the
+full baseline.
 
 ---
 

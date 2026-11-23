@@ -364,42 +364,45 @@ Three transports, one engine:
 
 ## 5. Phase plan
 
-### Phase 1 — AWARE as an ACS decision engine
+### Phase 1 — AWARE as an ACS decision engine — DONE
 
-- [ ] `src/acs/version.js`, `src/acs/schemas.js`, `src/acs/validator.js`
-- [ ] `src/acs/decision-engine.js` — validate, evaluate, normalise
-- [ ] `src/acs/normalize.js` — the total AWARE→ACS mapping
-- [ ] `src/acs/fail-closed.js`
-- [ ] `src/acs/transform.js`
-- [ ] `src/acs/host-adapter.js`
-- [ ] `src/api/routes/acs.js` + mount
+- [x] `src/acs/version.js`, `src/acs/schemas.js`, `src/acs/validator.js`
+- [x] `src/acs/decision-engine.js` — validate, evaluate, normalise
+- [x] `src/acs/normalize.js` — the total AWARE→ACS mapping
+- [x] `src/acs/fail-closed.js`
+- [x] `src/acs/transform.js`
+- [x] `src/acs/host-adapter.js`
+- [x] `src/api/routes/acs.js` + mount
 
-Supported intervention points: `pre_tool_call`, `post_tool_call`, `output`
-enforced. The other five (`agent_startup`, `input`, `pre_model_call`,
-`post_model_call`, `agent_shutdown`) return a **well-formed allow verdict**
-with no AWARE policy attached, and are recorded.
+Intervention points `pre_tool_call`, `post_tool_call` and `output` are
+enforced. The other five return a well-formed verdict and are recorded.
 
-### Phase 2 — Receipts into AWARE evidence
+### Phase 2 — Receipts into AWARE evidence — DONE
 
-- [ ] `src/acs/receipt.js` — build the interception record
-- [ ] `src/acs/approval.js` — the approval seam
-- [ ] wire into `logDecision` and `ToolAuditLogger`
-- [ ] link receipt → outcome
+- [x] `src/acs/receipt.js` — build the interception record
+- [x] `src/acs/approval.js` — the approval seam
+- [x] wired into the existing hash chain via `logDecision`
+- [x] the receipt links to the outcome through `parentDecisionId`
 
-### Phase 3 — Policy interoperability
+### Phase 3 — Policy interoperability — NOT STARTED
 
 - [ ] import ACS manifests (`extends` chains) into AWARE
 - [ ] export AWARE policies as ACS manifests
 - [ ] round-trip test: AWARE → ACS manifest → AWARE → identical verdicts
+- [ ] Rego / OPA, optional and gated
 
-### Phase 4 — Conformance and tests
+### Phase 4 — Conformance and tests — PARTLY DONE
 
-- [ ] schema validation of every artefact in CI
-- [ ] **drift test**: vendored schemas vs. the pinned SHA-256 table
-- [ ] reproduce the ACS email-tool example end to end, all three outcomes
-- [ ] fail-closed tests for the issue-#83 class
-- [ ] `evaluate_only` test
-- [ ] full existing suite green
+- [x] schema validation of every artefact (`test/unit/acs/validator.test.js`)
+- [x] **drift test**: vendored schemas vs. the pinned SHA-256 table
+- [x] reproduce the ACS email-tool example end to end, all three verdicts
+- [x] fail-closed tests for the issue-#83 class
+- [x] `evaluate_only` test
+- [x] the existing suite runs with no regression (996 / 959 / 37, the 37
+      pre-existing and identical to the baseline)
+- [ ] a CI job that runs the ACS suites on every push (the repository has
+      no `.github/workflows` directory; the CI surface is the gitea
+      pipeline, which this branch does not touch)
 
 ---
 

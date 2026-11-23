@@ -51,14 +51,14 @@ work landed.
 node --test --test-force-exit 'test/unit/**/*.test.js'
 
                  BEFORE      AFTER
-tests              877       1015      (+138 ACS tests)
-pass               840        978      (+138)
+tests              877       1019      (+142 ACS tests)
+pass               840        982      (+142)
 fail                37         37      (unchanged)
 ```
 
 **The failing set is byte-identical.** The 73 failing test-case lines were
 diffed before and after; the set difference is empty in both directions. So
-every one of the 138 new tests passes and nothing that passed before
+every one of the 142 new tests passes and nothing that passed before
 fails now.
 
 ```
@@ -87,3 +87,16 @@ completes the assertions and then hangs on an open handle, so the process
 never prints its summary and never exits. This is a pre-existing property
 of the suite on this host, not something the ACS work introduced. The
 `npm test` script is unchanged.
+
+## A note on flakiness
+
+One trainer test, `test/unit/trainer/index.test.js` — "submit failure —
+records failed run with exit_code=1", is **load-sensitive**. It passes 19/19
+when its file is run alone, and it failed once in three full-suite runs.
+The ACS work touches no trainer code, and the failing assertion is about a
+mock database's UPDATE count, so this is a pre-existing flake under
+parallel load rather than a regression.
+
+The numbers recorded above are from a run in which it did not flake. Three
+consecutive full-suite runs gave the same result: 1019 tests, 982 pass, 37
+fail.

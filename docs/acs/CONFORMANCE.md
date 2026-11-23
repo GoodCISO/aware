@@ -269,7 +269,7 @@ These are **not** implemented and are **not** claimed:
 ## 12. How to run these tests
 
 ```bash
-# The ACS suites. 138 tests.
+# The ACS suites. 142 tests.
 node --test 'test/unit/acs/*.test.js'
 
 # The whole unit suite.
@@ -280,8 +280,8 @@ npm test
 
 | Suite | Tests | Pass | Fail |
 | --- | --- | --- | --- |
-| `test/unit/acs/` | 138 | 138 | 0 |
-| `test/unit/**` (whole) | 1015 | 978 | 37 |
+| `test/unit/acs/` | 142 | 142 | 0 |
+| `test/unit/**` (whole) | 1019 | 982 | 37 |
 | `test/integration/**` | 28 | 22 | 4 |
 
 **No regressions.** The whole unit suite went from 877 tests / 840 pass /

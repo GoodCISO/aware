@@ -1,0 +1,25 @@
+# Pinned upstream versions for the ACS adapter.
+#
+# SPEC VERSION is the manifest-declared spec version that AWARE accepts in an
+# ACS manifest. It is NOT the release tag: the ACS release tag names the
+# engine release, while the manifest schema accepts two manifest version
+# strings. Both accepted strings are listed; the adapter pins the newer one.
+#
+# Upstream:  https://github.com/responsibleai/agent-control-spec
+# Tag:       v0.4.0-beta.2 (released 2026-11-04)
+# Commit:    b11ae38b1bd53d299789c1724f4f94f80a0c6540
+# Tree:      identical to origin/main at pin time (51781ee9be8a56eb86cf304448facf80076ca9be)
+#
+# Interoperability:  https://github.com/responsibleai/agent-hooks
+# Commit:            7e13a74b34af30f2049d902cc656c247c81d2f95 (2026-11-20, no release tag)
+#
+# Reference tooling: https://github.com/microsoft/agent-governance-toolkit
+# Commit:            f85abe1fffc5aaeed716a94bd6654677329215b9 (2026-11-18, no release tag)
+
+SPEC_VERSION=0.5.0-alpha.1
+SPEC_VERSION_COMPAT=0.4.0-alpha.1
+SPEC_RELEASE_TAG=v0.4.0-beta.2
+SPEC_COMMIT=b11ae38b1bd53d299789c1724f4f94f80a0c6540
+SPEC_TREE=51781ee9be8a56eb86cf304448facf80076ca9be
+AGENT_HOOKS_COMMIT=7e13a74b34af30f2049d902cc656c247c81d2f95
+AGT_COMMIT=f85abe1fffc5aaeed716a94bd6654677329215b9

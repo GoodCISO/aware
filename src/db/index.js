@@ -209,3 +209,15 @@ export { dbStatus };
 // The tier-promotion module is the persistence-side half of the AWARE v2
 // /v2/tier-promotions contract (parents: t_58ba2031).
 export { recordTierPromotion, buildIdempotencyKey, isValidCapability } from './tier-promotions.js';
+
+// Re-export the mandate-acceptance writer so callers can import it from the
+// db barrel: `import { recordMandate } from '../db/index.js'`.
+// The mandate module is the persistence-side half of the AWARE v2
+// /v2/mandates contract (card t_ae57240e).
+export {
+  recordMandate,
+  findMandateByTriggeringEventId,
+  resolveAgentConstraintTier,
+  buildGrantId,
+  rowToMandate,
+} from './mandates.js';

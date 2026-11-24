@@ -8,6 +8,27 @@ solution (Python source produced by a solver LLM) and a set of test
 assertions, runs the solution in a hard sandbox, and reports pass/fail
 plus structured diagnostics.
 
+CROSS-CUTTING: TaskCategory registration
+========================================
+This executor is TASK-CATEGORY-AGNOSTIC — it verifies any Python solution
+regardless of the originating task category. The canonical TaskCategory
+enum (including categories like 'notes-to-reviewer' for reviewer-note
+intent) lives at:
+
+    src/routing/pheromone-table.js (TaskCategory)
+
+Categories reach the AZR pipeline indirectly, via the
+`task_type` string on process-RL preference records that flow through
+`src/trainer/outcome-filter.js` (the `tag_match` filter rule, plus
+`allowedTaskTypes`). AZR itself does NOT maintain a parallel category
+registry — extending the JS-side enum is sufficient.
+
+If a future requirement adds AZR-side category gating, this file would
+be the place for it (likely a `TASK_TYPE_REGISTRY` constant near the
+class definitions, plus a `task_type` parameter on `executor.run`).
+For now, no such wiring exists — the single source of truth is the
+JS-side enum.
+
 SECURITY MODEL
 ==============
 The solution is UNTRUSTED LLM output. The threat model is:
@@ -57,6 +78,22 @@ configures both.
 
 INTERFACE
 =========
+
+Task categories (kept in sync with src/routing/pheromone-table.js → TaskCategory):
+
+    code-generation      — write/implement/refactor/debug/test
+    research             — investigate/explore/compare/review
+    security-review      — vulnerability/audit/pentest/CVE
+    data-analysis        — metrics/charts/correlation/aggregation
+    coordination         — orchestrate/route/dispatch/schedule
+    disclaimer-piling    — t_9881cd1d: stacked/over-redundant disclaimer content
+    general              — default fallback (no keywords)
+
+AZR does not enforce this registry at runtime — categories travel in the
+solver prompt and reward shaping, not the executor. This block is the
+authoritative registry reference for AZR-side reviewers and for the
+notes-to-reviewer / disclaimer-piling lineage. Keep in sync when adding
+new entries to pheromone-table.js.
 
     from azr.executor import SandboxExecutor, ExecutionResult, verify
 

@@ -122,7 +122,7 @@ class AgentRegistry {
     agent.touch();
     Agent.saveAgent(agent);
     
-    return { success: true, lastSeenAt: agent.lastSeenAt, trustScore: agent.trustScore };
+    return { success: true, lastSeenAt: agent.lastSeenAt, declaredTrustScore: agent.declaredTrustScore };
   }
 
   // Revoke agent (kill switch)
@@ -254,7 +254,7 @@ class AgentRegistry {
       return { valid: false, error: 'Agent not found' };
     }
     
-    const isValid = agent.credentials.current === credential;
+    const isValid = agent.checkCredential(credential);
     
     return {
       valid: isValid && agent.state === AgentState.ACTIVE,
@@ -305,7 +305,7 @@ class AgentRegistry {
     return agents.map(a => ({
       agentId: a.agentId,
       type: a.type,
-      trustScore: a.trustScore,
+      declaredTrustScore: a.declaredTrustScore,
       state: a.state,
       lastSeenAt: a.lastSeenAt
     }));

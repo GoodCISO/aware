@@ -78,7 +78,7 @@ class IdentityProvider {
       agentType: agent.type,
       capabilities: agent.capabilities,
       clearance: agent.clearance,
-      trustScore: agent.trustScore,
+      declaredTrustScore: agent.declaredTrustScore,
       validUntil: new Date(expiresAt * 1000).toISOString(),
       rotatedFrom: agent.credentials.previous || null,
       iat: now,
@@ -122,10 +122,28 @@ class IdentityProvider {
         return { valid: false, error: `Agent not operational (state: ${agent.state})` };
       }
       
-      // Check if credential has rotated since token was issued
-      if (decoded.rotatedFrom && agent.credentials.current !== decoded.rotatedFrom && !decoded.rotatedFrom) {
-        // Credential was rotated after this token was issued
-        // Allow if the token was issued before rotation
+      // Check if credential has rotated since token was issued.
+      //
+      // The token's `rotatedFrom` claim carries the credential hash that was
+      // current when the token was minted (src/agents/identity-provider.js:83
+      // sets it from `agent.credentials.previous`). If the agent's CURRENT
+      // credential differs from that hash, the credential has been rotated
+      // since this token was issued, and the token must be rejected.
+      //
+      // The previous form of this guard was:
+      //
+      //   if (decoded.rotatedFrom && agent.credentials.current !== decoded.rotatedFrom && !decoded.rotatedFrom)
+      //
+      // whose third conjunct is false whenever `decoded.rotatedFrom` is
+      // truthy — so the conjunction was never satisfiable and the
+      // rotation-rejection branch was unreachable. A stale token survived a
+      // rotation indefinitely.
+      //
+      // The check below is the reachable equivalent: the claim is present AND
+      // the current credential differs from it.
+      if (decoded.rotatedFrom && agent.credentials.current !== decoded.rotatedFrom) {
+        // Credential was rotated after this token was issued.
+        // Allow if the token was issued before the rotation.
         const rotatedAt = agent.credentials.rotatedAt ? new Date(agent.credentials.rotatedAt).getTime() : 0;
         const issuedAt = decoded.iat * 1000;
         if (rotatedAt > issuedAt) {
@@ -141,7 +159,13 @@ class IdentityProvider {
           type: decoded.agentType,
           capabilities: decoded.capabilities,
           clearance: decoded.clearance,
-          trustScore: decoded.trustScore
+          // Back-compat: tokens issued before the rename carry `trustScore`.
+          // Prefer the new claim, fall back to the legacy one so in-flight
+          // tokens keep verifying across the rename.
+          declaredTrustScore:
+            decoded.declaredTrustScore !== undefined
+              ? decoded.declaredTrustScore
+              : decoded.trustScore
         },
         claims: decoded
       };

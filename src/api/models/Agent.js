@@ -85,7 +85,7 @@ class Agent {
     this.version = agentData.version || '1.0.0';
     this.capabilities = agentData.capabilities || [];
     this.clearance = agentData.clearance || 'internal_only'; // e.g., "internal_only", "trusted", "elevated"
-    this.trustScore = agentData.trustScore !== undefined ? agentData.trustScore : 0.5;
+    this.declaredTrustScore = agentData.declaredTrustScore !== undefined ? agentData.declaredTrustScore : 0.5;
     this.state = agentData.state || AgentState.PENDING;
     this.credentials = agentData.credentials || {
       current: null,
@@ -132,7 +132,7 @@ class Agent {
 
   // Update trust score
   updateTrustScore(newScore) {
-    this.trustScore = Math.max(0, Math.min(1, newScore));
+    this.declaredTrustScore = Math.max(0, Math.min(1, newScore));
     this.updatedAt = new Date().toISOString();
   }
 
@@ -142,7 +142,7 @@ class Agent {
       [AgentState.PENDING]: [AgentState.ACTIVE, AgentState.DECOMMISSIONED],
       [AgentState.ACTIVE]: [AgentState.SUSPENDED, AgentState.REVOKED, AgentState.DECOMMISSIONED],
       [AgentState.SUSPENDED]: [AgentState.ACTIVE, AgentState.REVOKED, AgentState.DECOMMISSIONED],
-      [AgentState.REVOKED]: [AgentState.DECOMMISSIONED],
+      [AgentState.REVOKED]: [AgentState.ACTIVE, AgentState.DECOMMISSIONED],
       [AgentState.DECOMMISSIONED]: []
     };
 
@@ -175,7 +175,7 @@ class Agent {
       version: this.version,
       capabilities: this.capabilities,
       clearance: this.clearance,
-      trustScore: this.trustScore,
+      declaredTrustScore: this.declaredTrustScore,
       state: this.state,
       credentials: this.credentials,
       metadata: this.metadata,

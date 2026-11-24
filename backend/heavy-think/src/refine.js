@@ -3,6 +3,32 @@
 // self-critique → identify weaknesses → produce improved version with explicit
 // justification for the changes.
 
+// SCORE-INSTRUMENT CONTRACT (2026-11-11, kanban t_99423c45)
+// ---------------------------------------------------------------------
+// This module NEVER produces a PRM (judge) score. It used to expose
+// `refined_score`, which held either the provider's self-reported
+// `confidence` or a length-ratio heuristic bucket, and src/index.js copied
+// that value straight into `chosen.prm_score` — a field the DPO gate
+// compares against a JUDGE-scored `rejected.prm_score`.
+//
+// The consequence was that the gate subtracted two different instruments:
+// the heuristic tops out at 0.75 while the judge routinely returns
+// 0.8-1.0, so the gap was systematically negative and the trainer's
+// directionality check dropped better-refined pairs as "PRM-inverted".
+//
+// The refined trace is now scored by the SAME PRM judge that scores the
+// initial attempts (see src/index.js). This module therefore exposes only
+// a CONFIDENCE-shaped value, under a name that cannot be mistaken for a
+// judge score:
+//
+//   refinement_confidence — provider-reported confidence, or the legacy
+//                            length heuristic as a fallback. NOT a judge
+//                            score. Never compare it with a judge score.
+//
+// The heuristic is kept (not deleted) because the coordinator maps
+// `confidence` onto its L1/L2/L3 autonomy levels. It is simply no longer
+// reachable from any field the DPO gate treats as a judge score.
+
 export async function refine({ problem, best_attempt, task_type, context, client, system_prompt }) {
   // MR-HIGH-002 fix: pass system_prompt through to buildRefinementPrompt so
   // the caller can request { system, user } shape for true isolation.
@@ -11,13 +37,22 @@ export async function refine({ problem, best_attempt, task_type, context, client
   const result = await client.generate(refinementPrompt, { task_type, phase: 'refine' });
 
   const refined_trace = result.reasoning || result.text || best_attempt;
-  const refined_score = result.confidence ?? scoreHeuristic(refined_trace, best_attempt);
+  // SCORE-INSTRUMENT CONTRACT: see the header note above. The
+  // provider's self-reported `confidence` is NOT a judge score and
+  // must never reach a prm_score field.
+  const providerConfidence = typeof result.confidence === 'number'
+    ? result.confidence
+    : null;
+  const refinementConfidence = providerConfidence ?? scoreHeuristic(refined_trace, best_attempt);
   const cost_usd = result.cost_usd || 0;
 
   return {
     refined_trace,
-    refined_score,
-    confidence: Math.max(0, Math.min(1, refined_score)),
+    // NOT a PRM score — see the score-instrument contract above.
+    refinement_confidence: Math.max(0, Math.min(1, refinementConfidence)),
+    // Backwards-compatible alias for the same value (the coordinator
+    // maps `confidence` onto its L1/L2/L3 autonomy levels).
+    confidence: Math.max(0, Math.min(1, refinementConfidence)),
     cost_usd,
     // Additive: retry metadata from the provider client. See
     // t_22a34f6d design §3.4.2.

@@ -6,6 +6,7 @@ export const ROUTES = {
   ANOMALIES: '/anomalies',
   COMPLIANCE: '/compliance',
   AUDIT: '/audit',
+  OPERATORS: '/operators',
 };
 
 // 2026-11-10 (scribe): the API base was hard-coded to

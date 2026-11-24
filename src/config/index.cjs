@@ -31,6 +31,19 @@
 const path = require('node:path');
 const os = require('node:os');
 
+// The model-family map used by the judge's independence guard. The
+// CANONICAL source is the producer's module
+// (backend/heavy-think/src/judge-family.js); this module is the CommonJS
+// mirror used when that vendored copy is absent (the published npm package
+// ships src/config/ but NOT backend/). The mirror prefers the LIVE vendored
+// module when it is present — see ./judge-family.cjs.
+// (kanban t_2a91cc4b)
+const {
+  isIndependentJudge,
+  isCorpusTrainedArtefact,
+  familyModuleResolution,
+} = require('./judge-family.cjs');
+
 // --- helpers ------------------------------------------------------------
 
 function str(name, fallback) {
@@ -81,6 +94,84 @@ function redact(name, value) {
     return `<redacted length=${String(value.length)}>`;
   }
   return value;
+}
+
+// --- judge independence -------------------------------------------------
+
+/**
+ * The judge model paths — EVERY way an operator can name a judge.
+ *
+ * The provider judge (`AWARE_JUDGE_MODEL`) and the Ollama-hosted judge
+ * (`AWARE_JUDGE_OLLAMA_MODEL`) are the same kind of judge: a model that
+ * grades the candidate's traces. They differ only in WHICH env var carries
+ * the model id, so they must be subject to the SAME refusals (kanban
+ * t_866475db — before that card the family refusal applied to the provider
+ * judge only, and the Ollama judge was exempt from everything except the
+ * corpus-trained-artefact check).
+ *
+ * This is the ONE registry of judge paths. `config.validate()` walks it,
+ * so a third judge path cannot arrive un-refused: adding a judge model
+ * means adding an entry here, and the walk then applies both refusals to
+ * it. `read()` is lazy so the value is read at validation time, not at
+ * module-load time (the config object's getters are lazy by design).
+ *
+ * Each entry carries BOTH the env var the operator sets (`envVar`) and the
+ * config property that exposes it (`key`), so the error message can name
+ * the env var while a structural test can sweep the CONFIG's judge
+ * properties against the registry.
+ *
+ * @type {ReadonlyArray<{envVar: string, key: string, read: function(): string}>}
+ */
+const JUDGE_MODEL_PATHS = Object.freeze([
+  Object.freeze({
+    envVar: 'AWARE_JUDGE_MODEL',
+    key: 'judgeModel',
+    read: () => config.model.judgeModel,
+  }),
+  Object.freeze({
+    envVar: 'AWARE_JUDGE_OLLAMA_MODEL',
+    key: 'judgeOllamaModel',
+    read: () => config.model.judgeOllamaModel,
+  }),
+]);
+
+/**
+ * Refuse a judge model that cannot be independent of the candidate.
+ *
+ * TWO refusals, both hard, applied in this order:
+ *
+ *   1. The corpus-trained artefact (`aware-qwen35-9b`) — the model the
+ *      preference pairs TRAIN. It is checked FIRST: it is never independent
+ *      of anything, so the family comparison would refuse it too — but with
+ *      the WRONG reason ("same family as the candidate"), when the real
+ *      reason is that it is the model the preference pairs TRAIN. Naming the
+ *      real reason is the point of this guard, so the specific check must
+ *      not be shadowed by the general one.
+ *   2. A judge in the candidate's own model FAMILY — the judge would be
+ *      grading its own house style. The comparison is on the FAMILY, not on
+ *      the id.
+ *
+ * The message names BOTH the env var that was refused and the rule that
+ * fired, so the operator can tell which judge path was rejected and why.
+ * Both refusals live in THIS helper, so the two judge paths cannot drift
+ * apart again.
+ *
+ * @param {string} envVar  the env var the judge model came from
+ * @param {string} judgeModel  the judge model id
+ * @param {string} candidateModel  the candidate (provider) model id
+ * @throws {Error} when the judge model is not independent of the candidate
+ */
+function assertIndependentJudge(envVar, judgeModel, candidateModel) {
+  if (isCorpusTrainedArtefact(judgeModel)) {
+    throw new Error(
+      `Config: ${envVar} (${judgeModel}) must not be the AWARE-trained LoRA artefact — it is the model the preference pairs train, so it cannot judge them independently`
+    );
+  }
+  if (!isIndependentJudge(candidateModel, judgeModel)) {
+    throw new Error(
+      `Config: ${envVar} (${judgeModel}) must be a different model family from AWARE_PROVIDER_MODEL (${candidateModel}) — a judge in the candidate's own model family grades its own house style and can never gate the DPO set`
+    );
+  }
 }
 
 // --- dev-layout fallback path for rl-pipeline ---------------------------
@@ -174,6 +265,29 @@ const config = {
     // and the cheapest per call, and the PRM judge is only ranking
     // attempts — not producing them.
     get providerModel() { return str('AWARE_PROVIDER_MODEL', 'MiniMax-M3.1-Flash'); },
+    // --- INDEPENDENT JUDGE (kanban t_89720a07) ---
+    //
+    // The judge that scores a candidate must be a DIFFERENT model family
+    // from the candidate it grades, reached through a SEPARATELY configured
+    // client. Audit t_8f049433 measured that AWARE had no mechanism by
+    // which a judge could be independent of the candidate — not merely
+    // none configured, but none implementable via configuration.
+    //
+    // AWARE_JUDGE_MODEL names the judge model. Unset = no judge client is
+    // configured and the producer's own client judges (same-family by
+    // construction). The pair record says which happened.
+    get judgeModel() { return str('AWARE_JUDGE_MODEL', ''); },
+    // The judge runs against its own endpoint and its own credential. When
+    // AWARE_JUDGE_API_KEY is unset the judge's key falls back to the
+    // producer's (LLM_API_KEY) — usable, but the operator should be aware
+    // the judge is not credential-isolated.
+    get judgeApiKey() { return str('AWARE_JUDGE_API_KEY', undefined); },
+    get judgeApiHost() { return str('AWARE_JUDGE_API_HOST', undefined); },
+    // An Ollama-hosted judge. This must NOT be the AWARE-tuned LoRA
+    // artefact (`aware-qwen35-9b`), which is the model the preference
+    // pairs train — a judge trained on the corpus it selects is not
+    // independent (audit t_8f049433 §3.2).
+    get judgeOllamaModel() { return str('AWARE_JUDGE_OLLAMA_MODEL', ''); },
     get ollamaUrl() { return str('OLLAMA_URL', 'http://127.0.0.1:11434'); },
     // Timeout for a single Ollama generation request.
     // The previous hardcoded 5_000ms default was a coin-flip against
@@ -271,6 +385,23 @@ const config = {
     // values to keep (comma-separated env var). Empty default =
     // "operator hasn't decided yet" → keep all (see outcome-filter.js).
     get filterAllowedTaskTypes() { return str('AWARE_TRAINER_FILTER_ALLOWED_TASK_TYPES', ''); },
+    // Require an INDEPENDENT judge on every pair the filter admits
+    // (2026-11-17, kanban t_155a95a1).
+    //
+    // The producer writes `prm_score_independent` on every preference pair.
+    // Today the judge IS the producer's client, so every pair is same-family
+    // and therefore NOT independent -- and under
+    // `04-ai-product-evaluation.md:187-190` a same-family verdict is a
+    // DIAGNOSTIC, never a launch gate. Setting this to '1' makes the filter
+    // drop every pair whose judge was not independent.
+    //
+    // It is ORTHOGONAL to `filterRule`: set it alongside
+    // AWARE_TRAINER_FILTER_RULE=min_score_gap to get "independent judge AND
+    // same-instrument AND a wide enough gap", rather than replacing the
+    // parity checks. Default '0' = the operator has not required it.
+    get filterRequireIndependentJudge() {
+      return str('AWARE_TRAINER_FILTER_REQUIRE_INDEPENDENT_JUDGE', '0');
+    },
     // Phase 4 (the AWARE 2.0 Architecture ADR (internal) 618-627) AZR self-play corpus path. When set,
     // the trainer records it on aware_training_runs.azr_corpus_path
     // and ingests per-record results into aware_azr_results at
@@ -329,6 +460,48 @@ config.validate = function validate() {
       );
     }
   }
+  // The INDEPENDENT JUDGE must be a different model FAMILY from the
+  // candidate (kanban t_89720a07, audit t_8f049433 §3.2 / §5.1; family
+  // comparison fixed by t_2a91cc4b). Two refusals, both hard:
+  //
+  //   1. A judge model from the candidate's own model FAMILY — the judge
+  //      would be grading its own house style. The comparison is on the
+  //      FAMILY, not on the id: a cheaper sibling (`MiniMax-M3` against
+  //      `MiniMax-M3.1-Flash`) is the same family and must be refused
+  //      too. An id-equality test misses it.
+  //   2. A judge pointing at `aware-qwen35-9b` — the AWARE-LoRA merged
+  //      artefact, i.e. the model the preference pairs TRAIN. A judge
+  //      trained on the corpus it selects is not independent, and the
+  //      independence is in the wrong direction.
+  //
+  // Both are refused at config time rather than degrading silently: a
+  // judge that cannot be independent must not be configurable as one.
+  //
+  // EVERY judge path is subject to BOTH refusals. The provider judge
+  // (`AWARE_JUDGE_MODEL`) and the Ollama-hosted judge
+  // (`AWARE_JUDGE_OLLAMA_MODEL`) are the same kind of judge — a model that
+  // grades the candidate's traces — and they differ only in WHICH env var
+  // carries the model id. Before t_866475db the family refusal applied to
+  // the provider judge only, so an Ollama judge could be configured in the
+  // candidate's own family and the boot told the operator the
+  // configuration was valid. The producer's runtime guard then demoted the
+  // pair to a diagnostic, and the operator found the misconfiguration in
+  // the DATA rather than at boot.
+  //
+  // The judge paths are listed in ONE registry (JUDGE_MODEL_PATHS) and
+  // checked by ONE helper (assertIndependentJudge), so a third judge path
+  // cannot arrive un-refused: adding a judge model means adding a
+  // registry entry, and the loop below then applies both refusals to it.
+  //
+  // The family map is the PRODUCER's module (backend/heavy-think/src/
+  // judge-family.js) via the mirror in ./judge-family.cjs, so this
+  // config-time guard and the producer's runtime guard cannot disagree.
+  const candidate = config.model.providerModel;
+  for (const judgePath of JUDGE_MODEL_PATHS) {
+    const judgeModel = judgePath.read();
+    if (!judgeModel) continue;
+    assertIndependentJudge(judgePath.envVar, judgeModel, candidate);
+  }
   // Force-evaluate all lazy accessors so a bad value fails at validate(),
   // not at first request.
   void config.coordinator.requestTimeoutMs;
@@ -357,6 +530,17 @@ config.warnings = function warnings() {
   if (!config.model.providerApiKey && config.model.mode !== 'offline') {
     // Not a hard fail (we have a stub client) but worth flagging.
     out.push('LLM_API_KEY is not set — primary tier will fail and fall through to Ollama');
+  }
+  // The judge-independence guard reads the model-family map. When the
+  // CANONICAL producer module exists but could not be LOADED, the guard is
+  // running the MIRRORED map instead — a second implementation, which is the
+  // exact condition t_2a91cc4b set out to remove. That must not be silent
+  // (t_8b44fe9d). The 'absent' case is NOT an anomaly: the published npm
+  // package ships src/config/ but not backend/, so the mirror is the only
+  // implementation there.
+  const familyResolution = familyModuleResolution();
+  if (familyResolution.reasonCode === 'load-failed' || familyResolution.reasonCode === 'invalid') {
+    out.push(`judge-family: ${familyResolution.reason}`);
   }
   return out;
 };
@@ -398,6 +582,14 @@ config.snapshot = function snapshot() {
       providerModel: c.model.providerModel,
       ollamaUrl: c.model.ollamaUrl,
       ollamaTimeoutMs: c.model.ollamaTimeoutMs,
+      // The independent judge's identity. `judgeModel` is empty when no
+      // judge client is configured — i.e. the producer's own client is
+      // the judge, which is same-family by construction.
+      judgeModel: c.model.judgeModel,
+      judgeApiHost: c.model.judgeApiHost,
+      judgeOllamaModel: c.model.judgeOllamaModel,
+      judgeApiKeySet: Boolean(c.model.judgeApiKey),
+      judgeApiKeyLength: c.model.judgeApiKey ? c.model.judgeApiKey.length : 0,
     },
     rlPipeline: {
       path: c.rlPipeline.path,
@@ -437,6 +629,7 @@ config.snapshot = function snapshot() {
       filterRule: c.trainer.filterRule,
       filterMinGap: c.trainer.filterMinGap,
       filterAllowedTaskTypes: c.trainer.filterAllowedTaskTypes,
+      filterRequireIndependentJudge: c.trainer.filterRequireIndependentJudge,
       azrCorpusPath: c.trainer.azrCorpusPath,
       modalTokenId: redact('modalTokenId', c.trainer.modalTokenId),
       modalTokenSecret: redact('modalTokenSecret', c.trainer.modalTokenSecret),
@@ -445,5 +638,15 @@ config.snapshot = function snapshot() {
   };
 };
 
+// --- judge independence helpers ---------------------------------------
+
+// The judge-path registry is exported so the test suite can assert the
+// STRUCTURAL property this card exists to establish: every way an operator
+// can name a judge is listed here, and `config.validate()` walks the list.
+// Without the export the registry would be invisible to a test, and a
+// third judge path could be added without the suite noticing that it is
+// un-refused.
 module.exports = config;
 module.exports.default = config;
+module.exports.JUDGE_MODEL_PATHS = JUDGE_MODEL_PATHS;
+module.exports.assertIndependentJudge = assertIndependentJudge;

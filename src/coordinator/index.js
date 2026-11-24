@@ -9,6 +9,7 @@
 
 import { awareRlPipeline } from './rl-pipeline-bridge-integration.js';
 import { makeModelRouter, makeOllamaHealth } from './model-router.js';
+import { buildDefaultJudgeClient } from './judge-client.js';
 import { makeLoraReloader } from './lora-reloader.js';
 import { resolveKFromPluginConfig, validatePluginConfig, K_PLUGIN_CONFIG_VERSION } from './plugin-config.js';
 import config from '../config/index.cjs';
@@ -55,7 +56,12 @@ function resolveRlPipelinePath(opts = {}) {
  * @param {string} [options.task_type='standard']
  * @param {Object} [options.context]
  * @param {number} [options.K]
- * @param {Object} [options.client] — rl_pipeline-compatible client
+ * @param {Object} [options.client] — rl_pipeline-compatible client (the PRODUCER)
+ * @param {Object} [options.judgeClient] — rl_pipeline-compatible client for the JUDGE.
+ *   An INDEPENDENT judge, in a different model family from the producer.
+ *   When present, every judge call is served by it and never by `client`.
+ *   When absent, the producer's client is the judge and the pair record
+ *   records that fact (kanban t_89720a07).
  * @param {string} [options.sessionId]
  * @param {string} [options.agentId]
  * @param {string} [options.pairsDir] — override AWARE_PAIRS_DIR for this call
@@ -73,7 +79,7 @@ function resolveRlPipelinePath(opts = {}) {
  *   If absent, derived from `task_type` via TASK_GUIDANCE (preserves the
  *   legacy behavior of having system guidance in the prompt at all).
  */
-export async function coordinate({ problem, task_type, context, K, client, sessionId, agentId, pairsDir, pluginConfig, system_prompt }) {
+export async function coordinate({ problem, task_type, context, K, client, judgeClient, sessionId, agentId, pairsDir, pluginConfig, system_prompt }) {
   // MR-HIGH-001 / MR-HIGH-002: Input-side prompt-injection defense.
   // The user-supplied `problem` is forwarded to the model. With MR-HIGH-002
   // fixed architecturally (system-prompt isolation), the rule-based filter
@@ -115,6 +121,10 @@ export async function coordinate({ problem, task_type, context, K, client, sessi
     context: { ...context, sessionId, agentId },
     K: resolvedK.K,
     client,
+    // The INDEPENDENT judge client (kanban t_89720a07). It reaches
+    // heavy_think's `options.judgeClient`, which every judge call uses in
+    // preference to the producer's `client`.
+    judgeClient,
     pairsDir: pairsDir || config.coordinator.pairsDir,
     pluginConfig: pcValidation.value,
     pluginConfigValidation: pcValidation,
@@ -257,6 +267,29 @@ export async function buildDefaultRouter(opts = {}) {
 }
 
 /**
+ * Split a prompt into Ollama's `system` + `prompt` fields.
+ *
+ * rl-pipeline's MR-HIGH-002 shape is { system, user }: the rubric lives in
+ * the system role so the candidate cannot rewrite the criteria it is judged
+ * against. Ollama's /api/generate takes a string `prompt` plus an optional
+ * string `system`, so the object is split rather than flattened — flattening
+ * would put the rubric back in the user turn and lose the isolation.
+ *
+ * A legacy string prompt passes through with no system half.
+ */
+export function splitPromptForOllama(prompt) {
+  if (typeof prompt === 'string') return { system: null, prompt };
+  if (prompt && typeof prompt === 'object') {
+    const system = typeof prompt.system === 'string' && prompt.system.trim()
+      ? prompt.system
+      : null;
+    const user = typeof prompt.user === 'string' ? prompt.user : '';
+    return { system, prompt: user };
+  }
+  return { system: null, prompt: String(prompt ?? '') };
+}
+
+/**
  * Build a minimal Ollama client (the /api/generate endpoint).
  * Uses Node's built-in fetch (Node 18+).
  */
@@ -277,6 +310,14 @@ function buildDefaultOllamaClient(baseUrl, timeoutMs) {
       // (added 2026-07-12) is what suppresses that preamble for qwen3.5 in
       // Ollama 0.31.x — `num_think` / Modelfile PARAMETER think don't work.
       const model = opts.model || 'aware-qwen35-9b:latest';
+      // The repo's rl-pipeline sends a { system, user } prompt object
+      // (MR-HIGH-002 isolation). This client used to forward the object
+      // straight into the JSON body, where `prompt` must be a STRING —
+      // so the request either failed or, worse, serialised the object
+      // into the prompt text. Split the roles: the system half goes to
+      // Ollama's own `system` field (so the rubric stays out of the user
+      // turn), the user half is the prompt.
+      const { system, prompt: userPrompt } = splitPromptForOllama(prompt);
       // Timeout: config.model.ollamaTimeoutMs (AWARE_OLLAMA_TIMEOUT_MS),
       // overridable per-call via opts.timeout_ms.
       //
@@ -293,7 +334,8 @@ function buildDefaultOllamaClient(baseUrl, timeoutMs) {
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           model,
-          prompt,
+          prompt: userPrompt,
+          ...(system ? { system } : {}),
           stream: false,
           // Suppress qwen3.5 chain-of-thought preamble (per-request, not Modelfile).
           // Ollama 0.31.x: this boolean toggles thinking-mode for qwen3.5.
@@ -315,6 +357,7 @@ function buildDefaultOllamaClient(baseUrl, timeoutMs) {
 }
 
 export { makeModelRouter, makeOllamaHealth, buildDefaultOllamaClient };
+export { buildDefaultJudgeClient };
 export { makeLoraReloader, resolveActiveTarget, shouldReload, buildModelfile, postOllamaCreate } from './lora-reloader.js';
 export { awareRlPipeline } from './rl-pipeline-bridge-integration.js';
 

@@ -1,6 +1,6 @@
 {
   "name": "@goodciso/aware",
-  "version": "2.12.2",
+  "version": "2.12.3",
   "description": "AWARE - Autonomous Compliance Infrastructure for AI Agents",
   "repository": {
     "type": "git",
@@ -22,10 +22,13 @@
     "src/data/users.json.template",
     "src/data/agents.json.template",
     "src/db/",
+    "src/disclosure/",
     "src/election/",
     "src/emergency/",
+    "src/extension/",
     "src/engine-secret.js",
     "src/gateway/",
+    "src/governance/",
     "src/index.js",
     "src/kill-switch/",
     "src/monitoring/",
@@ -51,7 +54,9 @@
     "NOTICE.md",
     "README.md",
     "CHANGELOG.md",
-    "package.json"
+    "package.json",
+    "config/rlm.yaml",
+    "config/rlm.schema.json"
   ],
   "main": "src/index.js",
   "scripts": {
@@ -92,11 +97,13 @@
   "author": "Alvin Chang",
   "license": "Apache-2.0",
   "dependencies": {
+    "ajv": "^6.12.6",
     "cors": "^2.8.5",
     "express": "^4.18.2",
     "express-rate-limit": "^6.7.0",
     "express-validator": "^7.0.0",
     "helmet": "^6.0.1",
+    "js-yaml": "^4.1.0",
     "jsonwebtoken": "^9.0.0",
     "modal": "^0.8.0",
     "pg": "^8.21.0",

@@ -2,8 +2,9 @@ import React from 'react';
 import { Box, Typography, Card, CardContent, Chip, LinearProgress, Button, Tooltip } from '@mui/material';
 import SecurityIcon from '@mui/icons-material/Security';
 import WarningIcon from '@mui/icons-material/Warning';
+import { resolveTierBorder } from '../styles/tierBorder';
 
-const CONSTRAINT_LEVELS = [
+export const CONSTRAINT_LEVELS = [
   { id: 'T0', name: 'Audit Trail',     desc: "Every action is logged — foundational, always on", color: 'info' },
   { id: 'T1', name: 'Crypto Identity', desc: "Every agent gets a non-human identity it can't fake — foundational, always on", color: 'info' },
   { id: 'T2', name: 'Guardrailed',     desc: 'Operational policies constrain what the agent can do', color: 'warning' },
@@ -38,19 +39,25 @@ const ConstraintEnforcementView = ({ constraints = [], agents = [] }) => {
         {CONSTRAINT_LEVELS.map((level) => {
           const count = getAgentCount(level.id);
           const rate = getEnforcementRate(level.id);
-          // Theme colours go in as a theme() callback, NOT a
-          // `var(--mui-palette-<key>-main)` string. That CSS-variable form only
-          // resolves under MUI's CssVarsProvider / extendTheme, and this app
-          // uses a plain createTheme + ThemeProvider (src/index.js) — no CSS
-          // custom properties are ever emitted. Every one of these five
-          // borders has therefore been rendering at the Card default, so the
-          // tier colour was carried by nothing. A callback fails loud; a string
-          // in a dead variable fails silent.
+          // Theme colours are resolved through the REAL theme object, NOT
+          // through a `--mui-palette-<key>-main` CSS custom property. That
+          // variable form only resolves under MUI's CssVarsProvider /
+          // extendTheme, and this app uses a plain createTheme + ThemeProvider
+          // (src/index.js)
+          // -- no CSS custom properties are ever emitted. Every one of these
+          // five borders was therefore rendering at the Card default, so the
+          // tier colour was carried by nothing. A callback fails loud; a
+          // string in a dead variable fails silent.
+          //
+          // The resolver (styles/tierBorder.js) owns the fallback for a
+          // palette key the theme does not hold, so a missing token renders a
+          // VISIBLE border and warns, rather than silently falling back to
+          // the default hairline the way the original defect did.
           return (
             <Card
               key={level.id}
               variant="outlined"
-              sx={(theme) => ({ borderColor: theme.palette[level.color]?.main })}
+              sx={(theme) => ({ borderColor: resolveTierBorder(theme, level.color) })}
             >
               <CardContent>
                 <Box display="flex" justifyContent="space-between" alignItems="center" mb={1}>

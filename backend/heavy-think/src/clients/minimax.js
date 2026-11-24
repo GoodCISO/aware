@@ -141,7 +141,16 @@ async function generateOnce(prompt, opts, ctx) {
   const text = extractText(data);
   const cost = estimateCost(useModel, useMaxTokens, data);
 
-  return { reasoning: text, cost_usd: cost };
+  return {
+    reasoning: text,
+    cost_usd: cost,
+    // The model this client ACTUALLY put on the wire (kanban
+    // t_49d955b7). `useModel` is `opts.model || model` — the
+    // per-call override wins — so this is the served model, not the
+    // client's default. The pair record trusts this over the resolved
+    // intent.
+    served_model: useModel,
+  };
 }
 
 // Parse an HTTP Retry-After header into milliseconds. Per RFC 7231 the

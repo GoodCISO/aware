@@ -60,6 +60,7 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import vm from 'node:vm';
+import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -354,22 +355,75 @@ function deepEqual(a, b) {
 // -- Ollama client (for the CLI) -------------------------------------------
 
 /**
+ * Default sampling parameters for an evaluation run.
+ *
+ * `seed` fixes the policy's sampling draw; `temperature` fixes how much
+ * randomness that draw may contain. Both are REQUIRED for a published
+ * number to be reproducible — see the arXiv:2611.14068 disclosure
+ * checklist, axis 2 ("Sampling and spread").
+ *
+ * The default temperature is 0.0 on purpose. Ollama 0.40.11 (this
+ * host's build) does NOT honour the `seed` field at temperature > 0:
+ * two requests with the same seed and temperature 0.8 returned
+ * byte-different responses (measured — see
+ * `docs/research/aware-eval-null-band-2026-11-23.md`). A seed that
+ * the runtime ignores is worse than no seed at all, because it looks
+ * reproducible. Temperature 0 IS honoured: identical requests return
+ * byte-identical responses.
+ *
+ * @constant
+ */
+export const DEFAULT_EVAL_SEED = 20261123;
+export const DEFAULT_EVAL_TEMPERATURE = 0.0;
+
+/**
  * Build an Ollama-backed model generator: prompt → response text.
+ *
+ * The request body carries the sampling controls the disclosure
+ * checklist requires. Ollama's `/api/generate` takes `seed` at the
+ * top level and `options.temperature` inside `options`.
  *
  * @param {Object} opts
  * @param {string} opts.ollamaUrl — e.g. 'http://127.0.0.1:11434'
  * @param {string} opts.modelName — Ollama model name
  * @param {number} [opts.timeoutMs=60_000] — per-problem timeout
+ * @param {number} [opts.seed=DEFAULT_EVAL_SEED] — policy sampling seed
+ * @param {number} [opts.temperature=DEFAULT_EVAL_TEMPERATURE] — sampling temperature
+ * @param {Object} [opts.options] — extra Ollama `options` (e.g. { top_k })
  * @param {typeof fetch} [opts._fetch=globalThis.fetch]
  * @returns {(prompt: string) => Promise<string>}
  */
-export function makeOllamaGenerator({ ollamaUrl, modelName, timeoutMs = 60_000, _fetch = globalThis.fetch }) {
+export function makeOllamaGenerator({
+  ollamaUrl,
+  modelName,
+  timeoutMs = 60_000,
+  seed = DEFAULT_EVAL_SEED,
+  temperature = DEFAULT_EVAL_TEMPERATURE,
+  options = {},
+  _fetch = globalThis.fetch,
+}) {
   if (typeof ollamaUrl !== 'string' || ollamaUrl.length === 0) {
     throw new Error('makeOllamaGenerator: ollamaUrl is required');
   }
   if (typeof modelName !== 'string' || modelName.length === 0) {
     throw new Error('makeOllamaGenerator: modelName is required');
   }
+  if (!Number.isInteger(seed)) {
+    throw new Error('makeOllamaGenerator: seed must be an integer');
+  }
+  if (!Number.isFinite(temperature) || temperature < 0) {
+    throw new Error('makeOllamaGenerator: temperature must be a non-negative number');
+  }
+  // The request body the disclosure checklist asks for. `seed` and
+  // `options.temperature` are the two sampling controls Ollama
+  // honours; `stream: false` keeps the single-shot response shape.
+  const requestBody = {
+    model: modelName,
+    prompt: '',   // filled per call
+    stream: false,
+    seed,
+    options: { temperature, ...options },
+  };
   return async (prompt) => {
     const url = `${ollamaUrl.replace(/\/+$/, '')}/api/generate`;
     const ac = new AbortController();
@@ -378,7 +432,7 @@ export function makeOllamaGenerator({ ollamaUrl, modelName, timeoutMs = 60_000, 
       const res = await _fetch(url, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ model: modelName, prompt, stream: false }),
+        body: JSON.stringify({ ...requestBody, prompt }),
         signal: ac.signal,
       });
       if (!res.ok) {
@@ -390,6 +444,305 @@ export function makeOllamaGenerator({ ollamaUrl, modelName, timeoutMs = 60_000, 
     } finally {
       clearTimeout(t);
     }
+  };
+}
+
+/**
+ * Fetch the Ollama sidecar's model manifest and return the identity of
+ * one model: its digest (content hash), size, and the family/modified
+ * fields Ollama reports.
+ *
+ * A TAG IS A NAME, NOT AN IDENTITY: `qwen3.5:9b` and
+ * `aware-qwen35-9b:latest` are the same 6.6 GB weights under two
+ * names, and a tag can be re-pointed at different weights at any
+ * time. The digest is what identifies the bytes.
+ *
+ * @param {Object} opts
+ * @param {string} opts.ollamaUrl
+ * @param {string} opts.modelName
+ * @param {typeof fetch} [opts._fetch=globalThis.fetch]
+ * @returns {Promise<{model: string, digest: string|null, size: number|null,
+ *   family: string|null, modifiedAt: string|null, families: string[]|null,
+ *   error: string|null}>}
+ */
+export async function fetchModelIdentity({ ollamaUrl, modelName, _fetch = globalThis.fetch }) {
+  const empty = {
+    model: modelName,
+    digest: null,
+    size: null,
+    family: null,
+    modifiedAt: null,
+    families: null,
+    error: null,
+  };
+  if (typeof ollamaUrl !== 'string' || ollamaUrl.length === 0) {
+    return { ...empty, error: 'ollamaUrl is required' };
+  }
+  try {
+    const url = `${ollamaUrl.replace(/\/+$/, '')}/api/tags`;
+    const res = await _fetch(url, { method: 'GET' });
+    if (!res.ok) {
+      return { ...empty, error: `Ollama ${res.status}` };
+    }
+    const data = await res.json();
+    const models = Array.isArray(data?.models) ? data.models : [];
+    // Match on the exact tag first, then on the name without its
+    // ":latest" suffix (Ollama resolves `foo` to `foo:latest`).
+    const wanted = modelName.includes(':') ? modelName : `${modelName}:latest`;
+    const hit =
+      models.find((m) => m?.name === wanted) ||
+      models.find((m) => m?.model === wanted) ||
+      models.find((m) => m?.name === modelName) ||
+      null;
+    if (!hit) {
+      return { ...empty, error: `model '${modelName}' not present in the Ollama manifest` };
+    }
+    const details = hit.details && typeof hit.details === 'object' && !Array.isArray(hit.details)
+      ? hit.details
+      : null;
+    return {
+      model: hit.name || hit.model || modelName,
+      digest: typeof hit.digest === 'string' ? hit.digest : null,
+      size: typeof hit.size === 'number' ? hit.size : null,
+      family: details?.family ?? null,
+      modifiedAt: hit.modified_at ?? null,
+      families: details?.families ?? null,
+      error: null,
+    };
+  } catch (e) {
+    return { ...empty, error: e?.message || String(e) };
+  }
+}
+
+/**
+ * Read the harness's own code revision from git.
+ *
+ * The result object records the revision that PRODUCED the number, so
+ * a published score can be traced to the code that computed it. If git
+ * is unavailable (a tarball install, a container without .git) this
+ * returns nulls rather than throwing — the disclosure is then
+ * explicitly "unknown", not silently absent.
+ *
+ * @param {Object} [opts]
+ * @param {string} [opts.cwd] — directory to run git in
+ * @param {(cmd: string, args: string[], opts: Object) => string} [opts._exec]
+ *   — injectable exec (for tests)
+ * @returns {{revision: string|null, branch: string|null, dirty: boolean|null, error: string|null}}
+ */
+export function readGitRevision({ cwd = process.cwd(), _exec } = {}) {
+  const exec = _exec || defaultGitExec;
+  const run = (args) => {
+    try {
+      return exec('git', args, { cwd, encoding: 'utf8' }).trim();
+    } catch (e) {
+      return null;
+    }
+  };
+  const revision = run(['rev-parse', 'HEAD']);
+  if (!revision) {
+    return { revision: null, branch: null, dirty: null, error: 'git rev-parse HEAD failed' };
+  }
+  const branch = run(['rev-parse', '--abbrev-ref', 'HEAD']);
+  const status = run(['status', '--porcelain']);
+  return {
+    revision,
+    branch: branch || null,
+    dirty: status === null ? null : status.length > 0,
+    error: null,
+  };
+}
+
+/**
+ * Default git runner. `execFileSync` takes argv, so no shell is
+ * involved and no path needs quoting.
+ *
+ * @param {string} cmd
+ * @param {string[]} args
+ * @param {Object} opts
+ * @returns {string}
+ */
+function defaultGitExec(cmd, args, opts) {
+  return execFileSync(cmd, args, opts);
+}
+
+// -- Statistics (the paper's "report every control as a draw") -------------
+
+/**
+ * Arithmetic mean.
+ * @param {number[]} xs
+ * @returns {number}
+ */
+export function mean(xs) {
+  if (!Array.isArray(xs) || xs.length === 0) return NaN;
+  return xs.reduce((a, b) => a + b, 0) / xs.length;
+}
+
+/**
+ * Sample standard deviation (Bessel-corrected).
+ * @param {number[]} xs
+ * @returns {number} NaN for n < 2
+ */
+export function sampleSd(xs) {
+  if (!Array.isArray(xs) || xs.length < 2) return NaN;
+  const m = mean(xs);
+  return Math.sqrt(xs.reduce((a, b) => a + (b - m) ** 2, 0) / (xs.length - 1));
+}
+
+/**
+ * Two-sided t critical values at 95% confidence, for small n.
+ * Used to report a t interval over the null draws — the paper's
+ * instruction is that an interval over seeds or draws is a t interval
+ * that says so.
+ *
+ * @param {number} df — degrees of freedom (n - 1)
+ * @returns {number}
+ */
+export function tCritical95(df) {
+  const table = {
+    1: 12.706, 2: 4.303, 3: 3.182, 4: 2.776, 5: 2.571, 6: 2.447,
+    7: 2.365, 8: 2.306, 9: 2.262, 10: 2.228, 11: 2.201, 12: 2.179,
+    13: 2.160, 14: 2.145, 15: 2.131, 16: 2.120, 17: 2.110, 18: 2.101,
+    19: 2.093, 20: 2.086, 21: 2.080, 22: 2.074, 23: 2.069, 24: 2.064,
+    25: 2.060, 26: 2.056, 27: 2.052, 28: 2.048, 29: 2.045, 30: 2.042,
+  };
+  if (!Number.isFinite(df) || df < 1) return NaN;
+  if (df > 30) return 1.96;  // normal approximation past the table
+  return table[Math.round(df)] ?? 1.96;
+}
+
+/**
+ * Summarise a set of null draws.
+ *
+ * The paper requires that a control be reported "as a draw with its
+ * null center rather than as a point". This returns the center
+ * (mean), the spread (sd), the range, and a 95% t interval over the
+ * draws, with the interval's KIND named so a reader knows what it is.
+ *
+ * @param {number[]} xs — the draw values
+ * @param {Object} [opts]
+ * @param {number} [opts.confidence=0.95]
+ * @returns {{n: number, mean: number, sd: number, min: number, max: number,
+ *   range: number, values: number[], ci95: {low: number, high: number,
+ *   width: number, kind: string}|null, intervalKind: string}}
+ */
+export function summariseDraws(xs, { confidence = 0.95 } = {}) {
+  const values = Array.isArray(xs) ? xs.filter((x) => Number.isFinite(x)) : [];
+  const n = values.length;
+  if (n === 0) {
+    return {
+      n: 0, mean: NaN, sd: NaN, min: NaN, max: NaN, range: NaN,
+      values: [], ci95: null, intervalKind: 'none',
+    };
+  }
+  const m = mean(values);
+  const s = sampleSd(values);
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  // A t interval over the draws. n === 1 has no spread to state —
+  // say so rather than publishing a zero-width interval that reads
+  // like certainty.
+  if (n < 2) {
+    return {
+      n, mean: m, sd: NaN, min, max, range: max - min,
+      values, ci95: null,
+      intervalKind: 'none (n=1: a single draw has no spread to state)',
+    };
+  }
+  const t = tCritical95(n - 1);
+  const half = (t * s) / Math.sqrt(n);
+  return {
+    n,
+    mean: m,
+    sd: s,
+    min,
+    max,
+    range: max - min,
+    values,
+    ci95: { low: m - half, high: m + half, width: 2 * half },
+    intervalKind: `t interval over ${n} null draws (95%, df=${n - 1}, t=${t})`,
+  };
+}
+
+/**
+ * Build a paired difference series from two draw sets that scored the
+ * SAME problems.
+ *
+ * Pairing removes the scenario component: each problem's contribution
+ * is differenced before the mean, so a difference is "how much did
+ * this arm move on this problem" rather than "what did each arm score
+ * in total". The paper's instruction is to "pair every comparison
+ * episode by episode on shared environment seeds and report the
+ * paired mean with its interval and win count".
+ *
+ * THE UNIT MATTERS. The harness's published accuracy counts a problem
+ * as correct when its score is >= 1.0 — but a LiveCodeBench problem's
+ * score is a FRACTION (passes/total), so differencing the raw scores
+ * would produce a delta on a different scale from the published
+ * accuracy. This function therefore differences the BINARY PASS
+ * INDICATOR (score >= 1.0), which is the quantity the published
+ * accuracy counts. The paired mean over all problems of both
+ * benchmarks then equals the difference in the published mean
+ * accuracy exactly.
+ *
+ * The raw score delta is also reported, as `rawMeanDelta`, so a
+ * reader can see partial-credit movement separately.
+ *
+ * @param {Array<{id: string, score: number}>} a
+ * @param {Array<{id: string, score: number}>} b
+ * @returns {{paired: boolean, n: number, ids: string[], differences: number[],
+ *   wins: number, losses: number, ties: number, mean: number, sd: number,
+ *   ci95: {low: number, high: number, width: number}|null,
+ *   intervalKind: string, unmatched: string[], rawMeanDelta: number,
+ *   criterion: string}}
+ */
+export function pairedDifference(a, b) {
+  const pass = (score) => (Number.isFinite(score) && score >= 1.0 ? 1 : 0);
+  const mapA = new Map((a || []).map((p) => [p.id, p.score]));
+  const mapB = new Map((b || []).map((p) => [p.id, p.score]));
+  const ids = [...mapA.keys()].filter((id) => mapB.has(id)).sort();
+  const unmatched = [
+    ...[...mapA.keys()].filter((id) => !mapB.has(id)),
+    ...[...mapB.keys()].filter((id) => !mapA.has(id)),
+  ].sort();
+  if (ids.length === 0) {
+    return {
+      paired: false, n: 0, ids: [], differences: [], wins: 0, losses: 0, ties: 0,
+      mean: NaN, sd: NaN, ci95: null,
+      intervalKind: 'none (no shared problem ids — the runs cannot be paired)',
+      unmatched, rawMeanDelta: NaN,
+      criterion: 'binary pass (score >= 1.0)',
+    };
+  }
+  const differences = ids.map((id) => pass(mapB.get(id)) - pass(mapA.get(id)));
+  const rawDeltas = ids.map((id) => mapB.get(id) - mapA.get(id));
+  const wins = differences.filter((d) => d > 0).length;
+  const losses = differences.filter((d) => d < 0).length;
+  const ties = differences.length - wins - losses;
+  const m = mean(differences);
+  const s = sampleSd(differences);
+  let ci95 = null;
+  let intervalKind = 'none (n=1: a single paired difference has no spread to state)';
+  if (differences.length >= 2) {
+    const t = tCritical95(differences.length - 1);
+    const half = (t * s) / Math.sqrt(differences.length);
+    ci95 = { low: m - half, high: m + half, width: 2 * half };
+    intervalKind = `t interval over ${differences.length} paired problems (95%, df=${differences.length - 1}, t=${t})`;
+  }
+  return {
+    paired: true,
+    n: differences.length,
+    ids,
+    differences,
+    wins,
+    losses,
+    ties,
+    mean: m,
+    sd: s,
+    ci95,
+    intervalKind,
+    unmatched,
+    rawMeanDelta: mean(rawDeltas),
+    criterion: 'binary pass (score >= 1.0)',
   };
 }
 
@@ -485,20 +838,39 @@ function defaultGrader(name) {
  * Returns a structured result with both benchmark summaries + a
  * top-level `accuracy` (mean of the two).
  *
+ * The result now carries a `disclosure` block: the arXiv:2611.14068
+ * five-item checklist, mapped onto this harness. Every field is
+ * either a measured value or an explicit "none"/"unknown" — never a
+ * silently omitted one, because an omitted disclosure is
+ * indistinguishable from a disclosure that was never considered.
+ *
  * @param {Object} opts
  * @param {(prompt: string) => Promise<string>} opts.generate
  * @param {Object} [opts.overrides] — { gsm8k: [...], livecodebench: [...] }
- * @returns {Promise<{
- *   accuracy: number,
- *   gsm8k: {name, total, correct, accuracy, perProblem},
- *   livecodebench: {name, total, correct, accuracy, perProblem},
- *   modelName: string,
- *   label: string,
- *   startedAt: string,
- *   finishedAt: string,
- * }>}
+ * @param {string} [opts.modelName]
+ * @param {string} [opts.label]
+ * @param {number} [opts.seed] — the policy sampling seed that was used
+ * @param {number} [opts.temperature] — the sampling temperature that was used
+ * @param {number} [opts.n] — the number of draws this result is one of
+ * @param {number[]} [opts.draws] — the accuracies of every draw in the set
+ * @param {string} [opts.drawId] — this draw's index within the set
+ * @param {Object} [opts.modelIdentity] — result of fetchModelIdentity()
+ * @param {Object} [opts.gitRevision] — result of readGitRevision()
+ * @returns {Promise<Object>}
  */
-export async function runEvalSuite({ generate, overrides = {}, modelName = 'unknown', label = 'eval' }) {
+export async function runEvalSuite({
+  generate,
+  overrides = {},
+  modelName = 'unknown',
+  label = 'eval',
+  seed = null,
+  temperature = null,
+  n = 1,
+  draws = null,
+  drawId = null,
+  modelIdentity = null,
+  gitRevision = null,
+}) {
   const gsm8k = await runBenchmark({
     name: 'gsm8k',
     fixtures: overrides.gsm8k || GSM8K_FIXTURES,
@@ -511,6 +883,10 @@ export async function runEvalSuite({ generate, overrides = {}, modelName = 'unkn
   });
   const startedAt = new Date().toISOString();
   const accuracy = (gsm8k.accuracy + livecodebench.accuracy) / 2;
+  const drawValues = Array.isArray(draws) ? draws.filter((x) => Number.isFinite(x)) : null;
+  const dispersion = drawValues && drawValues.length > 1
+    ? summariseDraws(drawValues)
+    : null;
   return {
     accuracy,
     gsm8k,
@@ -519,6 +895,87 @@ export async function runEvalSuite({ generate, overrides = {}, modelName = 'unkn
     label,
     startedAt,
     finishedAt: new Date().toISOString(),
+    // -- Disclosure block (arXiv:2611.14068 §9 five-item checklist) --
+    disclosure: {
+      // 1. Artefact: the checkpoint's hash and size, the code revision.
+      artefact: {
+        modelName,
+        modelDigest: modelIdentity?.digest ?? null,
+        modelSize: modelIdentity?.size ?? null,
+        modelModifiedAt: modelIdentity?.modifiedAt ?? null,
+        modelIdentityError: modelIdentity?.error ?? null,
+        harnessRevision: gitRevision?.revision ?? null,
+        harnessBranch: gitRevision?.branch ?? null,
+        harnessDirty: gitRevision?.dirty ?? null,
+        harnessRevisionError: gitRevision?.error ?? null,
+      },
+      // 2. Sampling and spread: sampling mode, seeds, episode count,
+      //    and what the reported spread is a spread over.
+      sampling: {
+        seed,
+        temperature,
+        samplingMode: temperature === 0 ? 'greedy (temperature=0)' : 'stochastic',
+        n,
+        drawId,
+        draws: drawValues,
+        // What the spread is a spread OVER — the paper requires this
+        // be named, not implied.
+        spreadOver: drawValues
+          ? `${drawValues.length} draws of the same model on the same fixtures`
+          : null,
+        dispersion: dispersion
+          ? {
+            sd: dispersion.sd,
+            ci95: dispersion.ci95,
+            intervalKind: dispersion.intervalKind,
+            min: dispersion.min,
+            max: dispersion.max,
+            range: dispersion.range,
+          }
+          : null,
+      },
+      // 3. Criterion and scenario: what was scored, by what rule, on
+      //    which scenario, and when the criterion is a precision,
+      //    against what truth.
+      criterion: {
+        gsm8k: {
+          rule: 'exact-match on the last number in the response',
+          truth: 'the fixture\'s finalAnswer',
+          fixtureCount: gsm8k.total,
+          fixtureSet: overrides.gsm8k ? 'operator-supplied (--fixtures)' : 'in-repo GSM8K_FIXTURES',
+        },
+        livecodebench: {
+          rule: 'the model\'s code is rewritten to JS and run against the fixture test cases',
+          truth: 'the fixture\'s expected values',
+          fixtureCount: livecodebench.total,
+          fixtureSet: overrides.livecodebench
+            ? 'operator-supplied (--fixtures)'
+            : 'in-repo LIVECODE_FIXTURES',
+        },
+      },
+      // 4. Adversary: which red agent, as a scope limit on every claim.
+      //    GSM8K/LiveCodeBench have no adversary — state "none" rather
+      //    than omitting the axis.
+      adversary: {
+        present: false,
+        redAgent: 'none',
+        scopeLimit: 'GSM8K and LiveCodeBench are not adversarial scenarios; no red agent participates.',
+      },
+      // 5. Counting: whether the counts are asserted or executed.
+      counting: {
+        unit: 'asserted output',
+        detail:
+          'Scores count the model\'s ASSERTED response (the last number it states for GSM8K; ' +
+          'whether its asserted code passes the fixture test cases for LiveCodeBench). They are ' +
+          'not counts of executed real-world outcomes. LiveCodeBench grading re-executes the ' +
+          'model\'s code in a node:vm sandbox against the fixture\'s own test cases — those ' +
+          'cases are fixtures, not independent verification.',
+        timeouts: {
+          gsm8k: gsm8k.perProblem.filter((p) => /^error:/.test(p.detail)).length,
+          livecodebench: livecodebench.perProblem.filter((p) => /^error:/.test(p.detail)).length,
+        },
+      },
+    },
   };
 }
 
@@ -539,6 +996,41 @@ export function formatResult(result) {
   lines.push(`  GSM8K:        ${result.gsm8k.correct}/${result.gsm8k.total} = ${(result.gsm8k.accuracy * 100).toFixed(1)}%`);
   lines.push(`  LiveCodeBench: ${result.livecodebench.correct}/${result.livecodebench.total} = ${(result.livecodebench.accuracy * 100).toFixed(1)}%`);
   lines.push(`  mean accuracy: ${(result.accuracy * 100).toFixed(1)}%`);
+
+  // The disclosure block (arXiv:2611.14068 §9). Every axis is
+  // printed, including the ones that are "none" — an omitted axis is
+  // indistinguishable from an unconsidered one.
+  const d = result.disclosure;
+  if (d) {
+    const pct = (x) => (Number.isFinite(x) ? `${(x * 100).toFixed(1)}pp` : 'n/a');
+    lines.push('');
+    lines.push('  Disclosure (arXiv:2611.14068 §9):');
+    lines.push(`    [1] artefact:   digest=${d.artefact.modelDigest || 'UNKNOWN'}` +
+      (d.artefact.modelSize ? ` size=${d.artefact.modelSize}` : '') +
+      ` revision=${(d.artefact.harnessRevision || 'UNKNOWN').slice(0, 12)}`);
+    lines.push(`    [2] sampling:   seed=${d.sampling.seed ?? 'NONE'} ` +
+      `temperature=${d.sampling.temperature ?? 'NONE'} ` +
+      `mode=${d.sampling.samplingMode} n=${d.sampling.n}`);
+    if (d.sampling.dispersion) {
+      lines.push(`                   sd=${pct(d.sampling.dispersion.sd)} ` +
+        `range=${pct(d.sampling.dispersion.range)} ` +
+        `over ${d.sampling.spreadOver}`);
+      if (d.sampling.dispersion.ci95) {
+        lines.push(`                   95% CI=[${pct(d.sampling.dispersion.ci95.low)}, ` +
+          `${pct(d.sampling.dispersion.ci95.high)}] (${d.sampling.dispersion.intervalKind})`);
+      }
+    } else if (d.sampling.n === 1) {
+      lines.push('                   single draw — no dispersion measured. ' +
+        'A single draw is not a measurement; run --draws>=2 for a null band.');
+    }
+    lines.push(`    [3] criterion:  gsm8k=${d.criterion.gsm8k.fixtureCount} ` +
+      `(${d.criterion.gsm8k.fixtureSet}), lcb=${d.criterion.livecodebench.fixtureCount} ` +
+      `(${d.criterion.livecodebench.fixtureSet})`);
+    lines.push(`    [4] adversary:  ${d.adversary.redAgent} — ${d.adversary.scopeLimit}`);
+    lines.push(`    [5] counting:   ${d.counting.unit}` +
+      ` (timeouts: gsm8k=${d.counting.timeouts.gsm8k}, lcb=${d.counting.timeouts.livecodebench})`);
+  }
+
   lines.push('');
   lines.push('  Per-problem:');
   for (const p of [...result.gsm8k.perProblem, ...result.livecodebench.perProblem]) {
@@ -577,10 +1069,19 @@ if (isMainModule()) {
 export default {
   GSM8K_FIXTURES,
   LIVECODE_FIXTURES,
+  DEFAULT_EVAL_SEED,
+  DEFAULT_EVAL_TEMPERATURE,
   extractFinalNumber,
   extractPythonCode,
   gradeLiveCode,
   makeOllamaGenerator,
+  fetchModelIdentity,
+  readGitRevision,
+  mean,
+  sampleSd,
+  tCritical95,
+  summariseDraws,
+  pairedDifference,
   runBenchmark,
   runEvalSuite,
   formatResult,

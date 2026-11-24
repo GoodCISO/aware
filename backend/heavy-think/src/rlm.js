@@ -334,8 +334,15 @@ async function writeRootPair({ path, problem, task_type, final, prm_score, tree,
       component: 'rlm',
       problem,
       task_type,
-      chosen: { reasoning: final, prm_score },
-      rejected: { reasoning: rejected_reasoning, prm_score: rejected_prm },
+      // SCORE-INSTRUMENT CONTRACT (2026-11-11, kanban t_99423c45).
+      // The chosen side aggregates child confidences (a surrogate), the
+      // rejected side is a constant placeholder (also a surrogate). Neither
+      // is a PRM-judge score, so both sides are tagged with the instrument
+      // that produced them. The trainer's parity guard requires both sides
+      // of a pair to come from the SAME instrument before their difference
+      // is treated as a preference signal.
+      chosen: { reasoning: final, prm_score, prm_score_source: 'rlm_confidence_aggregate' },
+      rejected: { reasoning: rejected_reasoning, prm_score: rejected_prm, prm_score_source: 'rlm_baseline_placeholder' },
       tree,
       cost,
     };

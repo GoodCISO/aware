@@ -17,11 +17,20 @@ const path = require('node:path');
 
 const SCRIPT_PATH = path.join(__dirname, '..', '..', '..', 'scripts', 'seed-dev-users.js');
 
+// The script itself refuses to run in ~300ms; the budget below only has to
+// absorb the cost of `spawnSync` competing with the rest of the suite for
+// CPU. 5s was too tight once the suite grew past ~80 parallel files — the
+// spawn was killed mid-flight and the assertions read an empty stderr
+// ("stderr should mention NODE_ENV=production", actual: ''), i.e. a
+// load-induced timeout masquerading as a guard regression. 30s keeps the
+// test meaningful (a hung script still fails) without failing on load.
+const SPAWN_TIMEOUT_MS = 30_000;
+
 test('SEC-005: seed-dev-users.js refuses to run with NODE_ENV=production', () => {
   const result = spawnSync(process.execPath, [SCRIPT_PATH], {
     env: { ...process.env, NODE_ENV: 'production' },
     encoding: 'utf8',
-    timeout: 5000,
+    timeout: SPAWN_TIMEOUT_MS,
   });
   assert.notEqual(result.status, 0, `script exited ${result.status}, expected non-zero. stderr: ${result.stderr}`);
   assert.match(
@@ -35,7 +44,7 @@ test('SEC-005: seed-dev-users.js exits with the SEC-005 citation', () => {
   const result = spawnSync(process.execPath, [SCRIPT_PATH], {
     env: { ...process.env, NODE_ENV: 'production' },
     encoding: 'utf8',
-    timeout: 5000,
+    timeout: SPAWN_TIMEOUT_MS,
   });
   assert.match(result.stderr, /SEC-005/, 'stderr should cite the SEC-005 finding');
 });
@@ -49,7 +58,7 @@ test('SEC-005: seed-dev-users.js runs in development mode (NODE_ENV unset)', () 
   const result = spawnSync(process.execPath, [SCRIPT_PATH], {
     env: { ...process.env, NODE_ENV: undefined },
     encoding: 'utf8',
-    timeout: 5000,
+    timeout: SPAWN_TIMEOUT_MS,
   });
   if (result.status !== 0) {
     // Make sure the failure is NOT the production guard

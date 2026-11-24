@@ -59,7 +59,7 @@ router.post('/issue', async (req, res) => {
         killSignalId: result.killSignalId,
         severity,
         target,
-        blastRadius: result.blastRadius,
+        emergencyImpactEstimate: result.emergencyImpactEstimate,
         message: 'Kill signal issued via Raft consensus',
       });
     } else {

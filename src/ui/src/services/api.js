@@ -104,6 +104,19 @@ export const complianceAPI = {
   getAuditReport: (id) => api.get(`/compliance/reports/${id}`),
 };
 
+// Diary endpoints (v1).
+//
+// The v1 diary store has no operator column -- the producer stringifies its
+// payload into `content` -- so the Operators screen parses the operator
+// identity and score back out of that JSON. See
+// src/ui/src/constants/operators.js.
+//
+// `limit` is capped at 200 by the endpoint (min(limit, 200)).
+export const diaryAPI = {
+  listEntries: (params) => api.get('/diary/entries', { params }),
+  getEntry: (id) => api.get(`/diary/entries/${id}`),
+};
+
 // Audit trail endpoints
 export const auditAPI = {
   getTrail: (params) => api.get('/audit/trail', { params }),

@@ -1,10 +1,15 @@
 # Dockerfile.coordinator — AWARE 2.0 coordinator service
 # Per ADR (internal) Decision 1: persistent coordinator session + lightweight task workers
 #
-# rl-pipeline source is cloned from the canonical remote at build time,
-# not mounted from the host. The canonical remote is your internal git
-# server (pinned by tag), so changes to the local working copy don't
-# silently change what ships in the image. See ADR (internal).
+# rl-pipeline source is the repo's OWN vendored copy
+# (backend/heavy-think/src), COPYed into the image at build time. It used
+# to be cloned from an external git server at a pinned tag
+# (AWARE_RL_PIPELINE_TAG / AWARE_RL_PIPELINE_REPO), which made the
+# deployed build and the reviewed tree two different implementations of
+# the same judge modules — the coordinator ran a verify.js with no
+# `llm-judge` while config/rlm.yaml named `llm-judge` as the default
+# verification method, so the declared default never ran once. See AWARE
+# card t_091892e3.
 #
 # Build:
 #   DOCKER_BUILDKIT=1 docker compose \
@@ -12,10 +17,10 @@
 #     -p aware-2 \
 #     up -d --build
 #
-# The compose file passes AWARE_RL_PIPELINE_TAG=v0.2.2 + AWARE_RL_PIPELINE_REPO
-# as build args. The build stage below clones from your git server at
-# that tag. Override AWARE_RL_PIPELINE_REPO at build time to point at your
-# own internal repository.
+# There is no rl-pipeline build arg and no external git dependency: the
+# image ships the reviewed tree by construction, and the coordinator's
+# boot check (src/config/rl-pipeline-build.cjs) compares the live tree
+# against the sha256 manifest written at build time.
 #
 # Production alternative: publish rl-pipeline to a public registry
 # (GitHub or npm) and `npm install rl-pipeline@<version>` in the build.
@@ -24,30 +29,39 @@
 # ─── Stage 1: build ───────────────────────────────────────────────
 FROM node:22-alpine AS build
 
-# git is needed to clone rl-pipeline from your git server. alpine's
-# git package is ~5MB. We could use alpine/git:2.45 as a separate stage
-# to keep the cache layer clean, but some image mirrors only have a
-# subset of alpine/git tags; installing in the main stage is more
-# portable.
+# git is no longer needed to FETCH rl-pipeline (the repo's vendored copy is
+# shipped directly — see the COPY block below), but it is kept because some
+# npm dependencies resolve from git URLs, and because an operator inspecting
+# a build container expects a working git.
 RUN apk add --no-cache git
 
 WORKDIR /build
 
-# Pin rl-pipeline version (declared by compose, also overridable from CLI).
-# The Dockerfile clones the source at exactly this tag from your git server.
-# Operators MUST pass AWARE_RL_PIPELINE_REPO at build time (e.g. via docker-compose
-# `build.args` or `docker build --build-arg AWARE_RL_PIPELINE_REPO=...`). No
-# default is provided — pointing at a host-specific git server by default
-# would leak operator topology into published images.
-ARG AWARE_RL_PIPELINE_TAG=v0.2.2
-# AWARE_RL_PIPELINE_REPO has no default; the build will fail with a clear
-# "AWARE_RL_PIPELINE_REPO not set" error if the operator forgets to pass it.
-ARG AWARE_RL_PIPELINE_REPO
+# ─── the rl-pipeline library the coordinator RUNS ─────────────────────────
+# It used to be cloned from an external git server at a pinned tag
+# (AWARE_RL_PIPELINE_TAG, default v0.2.2). That made the deployed build and
+# the reviewed tree two DIFFERENT implementations of the same judge modules:
+# the coordinator ran a 123-line verify.js with no `llm-judge`, a prm.js that
+# concatenated the rubric into the user message (no isolation), and an
+# index.js that wrote no `prm_score_source` — while config/rlm.yaml named
+# `llm-judge` as the default verification method. 329,627 of 329,639 live
+# preference pairs carried verification.method == 'none': the declared
+# default never ran once. See AWARE card t_091892e3.
+#
+# The repo's backend/heavy-think/ IS the vendored source of that library
+# (backend/heavy-think/VENDORED.md), so the image now ships the reviewed
+# tree by construction — no tag to bump, no second implementation to drift.
+COPY backend/heavy-think/src ./rl-pipeline/src
+COPY backend/heavy-think/package.json ./rl-pipeline/package.json
+COPY backend/heavy-think/LICENSE ./rl-pipeline/LICENSE
+COPY backend/heavy-think/NOTICE.md ./rl-pipeline/NOTICE.md
 
-# Clone rl-pipeline from your git server at the pinned tag. The tag,
-# not the local working copy, is the source of truth. See ADR (internal).
-RUN git clone --depth 1 --branch ${AWARE_RL_PIPELINE_TAG} ${AWARE_RL_PIPELINE_REPO} /build/rl-pipeline && \
-    rm -rf /build/rl-pipeline/.git
+# Write the sha256 manifest of the shipped rl-pipeline sources next to it.
+# The coordinator's boot check (src/config/rl-pipeline-build.cjs) compares
+# the live tree against this manifest, so a hot-patched or replaced
+# /app/rl-pipeline is caught at startup instead of shipping silently.
+# `sha256sum` is in busybox, which alpine already has.
+RUN cd /build/rl-pipeline/src && find . -name '*.js' -type f | sed 's|^\./||' | sort | xargs sha256sum > ../SOURCE-SHA256SUMS
 
 # Copy AWARE package manifest first for better layer caching
 COPY package*.json ./
@@ -57,11 +71,30 @@ RUN npm install --omit=dev
 
 # Copy the AWARE source (coordinator service + the shared config module)
 COPY src/coordinator ./src/coordinator
+# src/config is copied FILE BY FILE, so every module the coordinator imports
+# must be listed here. src/coordinator/http-server.js imports
+# ../config/rl-pipeline-build.cjs (the deployed-judge-path integrity check),
+# and a COPY that omits it makes the coordinator fail to START with
+# ERR_MODULE_NOT_FOUND. test/unit/config/rl-pipeline-build.test.js asserts
+# that every src/config module the coordinator imports is shipped here.
 COPY src/config/index.cjs ./src/config/index.cjs
+# src/config/index.cjs requires ./judge-family.cjs (the model-family map behind
+# the judge independence guard, kanban t_2a91cc4b). A COPY that omits it
+# makes the coordinator fail to START with ERR_MODULE_NOT_FOUND.
+COPY src/config/judge-family.cjs ./src/config/judge-family.cjs
+COPY src/config/rlm.cjs ./src/config/rlm.cjs
+COPY src/config/rl-pipeline-build.cjs ./src/config/rl-pipeline-build.cjs
 COPY src/db ./src/db
 COPY src/budget ./src/budget
 COPY src/trainer ./src/trainer
 COPY src/audit ./src/audit
+# scripts/chain-depth-census.js is the read-only decisionChainDepth
+# population census (ADR-080): it streams /data/audit/decision-chain.jsonl
+# and prints a JSON report to stdout. Copying it into the image keeps the
+# census runnable from the container via `docker exec aware-2-coordinator
+# node /app/scripts/chain-depth-census.js` without a bind mount. Only this
+# one file is copied — the rest of scripts/ is host-side tooling.
+COPY scripts/chain-depth-census.js ./scripts/chain-depth-census.js
 # t_cc0b54c2 / APTS-MR-019: src/coordinator/index.js eagerly imports
 # credential-classifier (APTS-MR-019 re-export at line 317) at module
 # load time. ESM `export { ... } from` evaluates the imported module
@@ -81,6 +114,8 @@ COPY db ./db
 # in-image copy is the fallback that makes the default case work.
 # See docs/audits/aware-2.0-trainer-env-audit-2026-06-13.md BLOCKER-1.
 COPY config/modal-training.json ./config/modal-training.json
+COPY config/rlm.yaml ./config/rlm.yaml
+COPY config/rlm.schema.json ./config/rlm.schema.json
 
 # ─── Stage 2: runtime ─────────────────────────────────────────────
 FROM node:22-alpine AS runtime
@@ -119,6 +154,8 @@ RUN mkdir -p /data/awareness-pairs && mkdir -p /data/audit && chown -R aware:awa
 # to a readable file when WORKDIR=/app. See
 # docs/audits/aware-2.0-trainer-env-audit-2026-06-13.md BLOCKER-1.
 COPY --from=build --chown=aware:aware /build/config/modal-training.json /app/config/modal-training.json
+COPY --from=build --chown=aware:aware /build/config/rlm.yaml /app/config/rlm.yaml
+COPY --from=build --chown=aware:aware /build/config/rlm.schema.json /app/config/rlm.schema.json
 # Symlink so the coordinator's static `../../../../src/rl-pipeline/` import
 # (which resolves to `/src/rl-pipeline/` from /app/) finds the source at
 # /app/rl-pipeline/. This matches the dev layout where `../../../../` from

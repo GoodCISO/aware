@@ -12,13 +12,20 @@
 #     -p aware-2 \
 #     up -d --build
 #
-# rl-pipeline source is cloned from your internal git server
-# (pinned at AWARE_RL_PIPELINE_TAG=v0.2.2) inside the Dockerfile's Stage 0
-# (alpine/git). The build does NOT mount the local working copy from
-# the host — the canonical source is the git remote you specify via
-# AWARE_RL_PIPELINE_REPO at build time. To bump rl-pipeline: tag the new
-# commit in your repo, update AWARE_RL_PIPELINE_TAG in this file, re-build.
-# See ADR (internal).
+# rl-pipeline source is the repo's OWN vendored copy
+# (backend/heavy-think/src), COPYed into the image by the Dockerfile.
+# The build does NOT mount the local working copy from the host, and it
+# does NOT clone rl-pipeline from an external git server — there is no
+# tag to bump, so the deployed judge path cannot drift away from the
+# reviewed tree. The coordinator's boot check
+# (src/config/rl-pipeline-build.cjs) compares the live tree against the
+# sha256 manifest the build writes. See AWARE card t_091892e3.
+#
+# (Before t_091892e3: rl-pipeline was cloned at a pinned tag
+# AWARE_RL_PIPELINE_TAG=v0.2.2 from AWARE_RL_PIPELINE_REPO. That pin was
+# the direct cause of the drift — the deployed verify.js had no
+# `llm-judge` while config/rlm.yaml named it as the default method, so
+# the declared default never ran once.)
 #
 # Tear down:
 #   docker compose -f docker-compose.coordinator.yml -p aware-2 down
@@ -195,24 +202,34 @@ services:
       # `docker compose build` has no way to pass - so the build failed
       # with "additional privileges requested".
       #
-      # The fix is to reach the git server over host.docker.internal, which
-      # Docker Desktop/Colima resolve to the host gateway from inside any
-      # build container. No entitlement, no extra builder, no --allow flag.
-      # Verified 2026-11-10: gitea is published on 0.0.0.0:4001 and answers
-      # on host.docker.internal:4001 with HTTP 200 from a build container.
+      # 2026-11-17 (t_091892e3): the rl-pipeline build args are GONE.
+      # The image no longer clones rl-pipeline from an external git server at
+      # a pinned tag — it ships the repo's own vendored copy
+      # (backend/heavy-think/src, see Dockerfile.coordinator), so there is
+      # no tag to bump and no second implementation to drift. The old pin
+      # was the direct cause of the drift: the deployed verify.js had no
+      # `llm-judge` while config/rlm.yaml named it as the default method.
       #
-      # If your git server is on a routable address, the default bridge
-      # network reaches it directly and this stays unnecessary.
-      args:
-        # 2026-11-10 (scribe): was hardcoded v0.2.2. The pin is operator
-        # config, not build policy - it now comes from AWARE_RL_PIPELINE_TAG
-        # like the repo URL does, so bumping it no longer requires editing
-        # this file. The default preserves the previous behaviour.
-        - AWARE_RL_PIPELINE_TAG=${AWARE_RL_PIPELINE_TAG:-v0.2.2}
-        # Override at the command line, in your .env, or in a CI secret.
-        # Example: AWARE_RL_PIPELINE_REPO=https://git.internal/rl-pipeline.git
-        - AWARE_RL_PIPELINE_REPO=${AWARE_RL_PIPELINE_REPO:?AWARE_RL_PIPELINE_REPO must be set (SEC-007/008, privacy scrub [date-redacted])}
-    image: aware-coordinator:0.4.6-phase4-rl-pipeline-mcp-credential
+      # With no git remote to reach, the build needs no network entitlement
+      # at all — the default bridge network is sufficient.
+    # 2026-11-19 (t_3212eebd): bumped to 0.4.7-judge-family-deployed. The
+    # 0.4.6 image shipped the PRE-t_8b44fe9d judge-family resolver, so the
+    # config-time guard ran the MIRROR while the runtime guard ran the
+    # canonical module -- two independent implementations of the same rule
+    # in production. 0.4.7 resolves /app/rl-pipeline/src/judge-family.js.
+    # 2026-11-19 (t_9be93b08): bumped to 0.4.8-served-model-deployed. The
+    # 0.4.7 image shipped the PRE-t_49d955b7 judge client, so the pair
+    # record named the model that was ASKED FOR rather than the model that
+    # SERVED, and the Ollama judge path ignored the per-call override
+    # entirely. 0.4.8 ships the served-model contract.
+    # 2026-11-19 (t_92708010): bumped to 0.4.9-config-guard-deployed. The
+    # 0.4.8 image shipped the PRE-t_866475db config layer, so the boot-time
+    # judge-independence refusal applied to AWARE_JUDGE_MODEL only.
+    # AWARE_JUDGE_OLLAMA_MODEL -- the same kind of judge, named by a
+    # different env var -- was exempt from the model-FAMILY refusal, so a
+    # same-family Ollama judge was ACCEPTED at boot and the operator was
+    # told the configuration was valid. 0.4.9 ships the config-time guard.
+    image: aware-coordinator:0.4.9-config-guard-deployed
     container_name: aware-2-coordinator
     ports:
       - "18081:8080"
@@ -483,17 +500,24 @@ services:
       context: .
       dockerfile: Dockerfile.coordinator
       network: host
-      args:
-        # 2026-11-10 (scribe): was hardcoded v0.2.2. The pin is operator
-        # config, not build policy - it now comes from AWARE_RL_PIPELINE_TAG
-        # like the repo URL does, so bumping it no longer requires editing
-        # this file. The default preserves the previous behaviour.
-        - AWARE_RL_PIPELINE_TAG=${AWARE_RL_PIPELINE_TAG:-v0.2.2}
-        - AWARE_RL_PIPELINE_REPO=${AWARE_RL_PIPELINE_REPO:?AWARE_RL_PIPELINE_REPO must be set (SEC-007/008, privacy scrub [date-redacted])}
+      # 2026-11-17 (t_091892e3): the rl-pipeline build args are GONE — the
+      # image ships the repo's vendored copy, so there is no external tag to
+      # pin. See the coordinator service above.
     # [date-redacted]: bumped to 0.4.5-phase4-rl-pipeline-from-internal-git.
-    # rl-pipeline is now cloned from your internal git server in the
-    # Dockerfile, not mounted from the host. See ADR (internal).
-    image: aware-coordinator:0.4.6-phase4-rl-pipeline-mcp-credential
+    # 2026-11-17 (t_091892e3): rl-pipeline is now the repo's own vendored
+    # copy (backend/heavy-think/src), COPYed into the image by the
+    # Dockerfile — not cloned from an internal git server, not mounted from
+    # the host. See the coordinator service above.
+    # 2026-11-19 (t_3212eebd): bumped to 0.4.7-judge-family-deployed so the
+    # trainer ships the same judge-family resolver as the coordinator.
+    # 2026-11-19 (t_9be93b08): bumped to 0.4.8-served-model-deployed so the
+    # trainer ships the same served-model judge contract as the coordinator.
+    # 2026-11-19 (t_92708010): bumped to 0.4.9-config-guard-deployed so the
+    # trainer ships the same config-time judge-independence guard as the
+    # coordinator. The trainer reads the same judge configuration, so a
+    # trainer without the guard would refuse a configuration the coordinator
+    # accepts (and vice versa) -- the two must agree.
+    image: aware-coordinator:0.4.9-config-guard-deployed
     container_name: aware-2-trainer
     profiles: ["training"]
     command: ["node", "src/trainer/index.js"]

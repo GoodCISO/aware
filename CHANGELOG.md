@@ -2,6 +2,161 @@
 
 All notable changes to AWARE Evolution are documented here.
 
+## [Unreleased] — POST /v2/mandates (RiskMandate acceptance)
+
+**Kanban:** t_ae57240e
+
+### Added
+
+- **`src/v2/mandates_handler.js`** — server-side handler for
+  `POST /v2/mandates`, the contract in
+  `docs/openapi.yaml#/paths/~1v2~1mandates`. Validates the
+  `MandateCreate` schema hand-rolled against openapi.yaml (8 required
+  fields, 3 enums, RFC3339 `expiry`, `underwriters.minItems: 1`,
+  `additionalProperties: false` at root — a client that supplies a
+  server-set field such as `grant_id` or `agent_constraint_tier` is
+  rejected). Mounted under `/v2` in `src/api/index.js` after the
+  bearer-auth gate, exactly like the sibling `POST /v2/tier-promotions`,
+  so a request without a token gets 401 before it reaches the handler.
+  Status paths: **201** (MandateResponse), **400** (malformed payload,
+  `Error` shape with `error` + `details`), **409** (idempotency hit on
+  `triggering_event_id` — the EXISTING grant is returned in the body so
+  the client can reconcile), **503** (persistence unavailable — 201
+  would be a lie without storage), **500** (write failed).
+- **`src/db/mandates.js`** — `recordMandate(conn, mandate)` writer.
+  Never throws: it returns a structured
+  `{recorded, reason?, mandate?}` result so the request path stays
+  intact. `triggering_event_id` is the idempotency boundary — the
+  insert uses `ON CONFLICT (triggering_event_id) DO NOTHING` and a
+  `23505` unique violation is the same reconciliation hit, so both
+  paths return `{recorded: false, reason: 'duplicate', mandate}` and
+  the handler answers 409 with the existing grant.
+  `resolveAgentConstraintTier()` reads the tier off the triggering
+  `aware_tier_promotions` row (a `tier_promotion` trigger) and falls
+  back to **T0** when no tier can be evidenced — a Mandate response
+  never asserts more autonomy than the evidence supports.
+- **`db/migrations/007_mandates_audit_table.sql`** — forward
+  migration for the `aware_mandates` table: `grant_id` (UUID, UNIQUE),
+  `triggering_event_id` (TEXT, UNIQUE — the 409 guard), the wire-level
+  Mandate fields, a tri-state `lethal_trifecta_flag` (NULL = not
+  computed), and `agent_constraint_tier` (server-set, defaults to T0).
+  Indexes for the three operator queries: lookup by triggering event,
+  a principal's mandate history newest-first, and live expiry windows.
+- **`src/db/index.js`** — re-exports the mandate writer and helpers
+  from the db barrel.
+- **Test suites** — `test/unit/api/mandates-handler.test.js` (59
+  cases: every validation branch and every HTTP status path),
+  `test/unit/api/mandates-mount.test.js` (7 cases: the route really
+  is mounted in the real gateway behind the real bearer-auth gate,
+  and the sibling `/v2/tier-promotions` endpoint is unaffected), and
+  `test/unit/db/mandates.test.js` (32 cases: pure helpers, the writer's
+  happy path, both duplicate paths, and every validation failure).
+
+### Schema-rigor notes
+
+- `openapi.yaml` v1.1.0 replaced `MandateResponse.ramm_level` (an
+  integer 1–5 RM maturity level) with `agent_constraint_tier` (an
+  AWARE T0–T4 constraint tier). The implementation follows the
+  current spec: the response carries `agent_constraint_tier`.
+  `ramm_level` is not emitted, and the CHANGELOG entry that still
+  describes it is superseded by this one.
+- `MandateCreate` requires 8 fields in the current spec;
+  `control_ids` and `lethal_trifecta_flag` are OPTIONAL properties
+  (they were listed as required in an earlier revision of the card
+  body). The spec wins — a payload that omits them is valid.
+- `MandateResponse` is `additionalProperties: false`, so the surrogate
+  `id` column is not on the wire, and `lethal_trifecta_flag` is omitted
+  when the stored value is NULL (the server does not assert a trifecta
+  verdict it has not computed).
+- Unlike `/v2/tier-promotions` (202, best-effort — "the server has
+  recorded the event"), this endpoint's 201 means "durably recorded",
+  so a DB outage is reported as 503 rather than a best-effort accept.
+
+### Out of scope (follow-up cards)
+
+- The RiskMandate API CLIENT — AWARE records acceptances; it does not
+  call `riskmandate.ai`. (The RiskMandate tree was cancelled on
+  2026-11-14, card `t_6ae9a5e7`.)
+- The RM-side hook, the coordinator trigger logic, and UI
+  mandate-history views.
+
+## [Unreleased] — disclosure record generator (C1)
+
+**This does not close the incident-disclosure gap.** It mechanises it at class granularity only.
+The Nadella coverage audit's "❌ ABSENT" marking on incident disclosure stays in every external
+description until specific-granularity (P-2) disclosure is reachable — which requires the C2
+runtime-behaviour snapshots (`S-POLICY` / `S-TOOLS` / `S-KILL`) to be recording. See ADR-079 §4.
+
+### Added
+
+- **`src/disclosure/disclosure-record.js` — the disclosure record generator (C1).** Binds a
+  `gap-tracker.js` gap and its `framework-mapper.js` control IDs to an `exportChain(fromId, toId)`
+  window. The record carries the window verbatim — each record's `prevHash` and `hash` — so a
+  recipient can **recompute** the hashes rather than trust AWARE's assertion. This is what makes it
+  disclosure rather than a press release.
+  - `verifyChainWindow(record)` recomputes every hash from the carried records and distinguishes
+    **hash mismatch** (a record was altered) from **chain break** (a record was removed or
+    reordered — a per-record hash check alone would not catch it).
+  - The window's anchor is **declared, not verified**: the first record's `prevHash` points outside
+    the window and is verifiable only when it is the genesis hash. `verifyFullChain()` is
+    re-exported for the recipient who has the log file.
+  - Canonicalisation is delegated to the shipped `canonicalSerialize()` rather than re-implemented,
+    because that function serialises a fixed field order and drops keys outside it; a generic
+    "sort the keys" re-implementation would disagree with the stored hash and fail on valid
+    records.
+- **`src/disclosure/index.js`** — the module's public API.
+- **`test/unit/disclosure/disclosure-record.test.js`** — 14 tests: the export→verify round trip
+  on a live chain, tamper detection, chain-break detection, control-class resolution by inversion
+  over the real framework mapper, and the granularity constraint.
+- **ADR-079 — AWARE Disclosure Record Generator (C1).**
+
+### The publication-granularity constraint
+
+The generator renders **P-0 (existence) and P-1 (class) only**. **P-2 (specific) is refused with
+an error, not downgraded** — a silent downgrade would let a caller believe it holds a specific
+diff while holding a class-level one. Every record carries `publication.statement` asserting
+non-closure on its face, so a record forwarded without its surrounding context still says what it
+is.
+
+Note on vocabulary: the publication-granularity ladder is `P-0/P-1/P-2` and the state-layer axis is
+`L-A/L-B/L-C` — two distinct axes that must not be conflated. Records also carry
+`publication.granularityLegacy` mapping `P-0→L-0`, `P-1→L-1`, matching the names the
+implementation cards use.
+
+## [2.12.3] — 2026-11-12 — A revoked agent can be reinstated; `registry.verify()` compares correctly
+
+**Release type:** patch. Two runtime defects in agent lifecycle and credential verification are fixed. Both were found by a source audit of the decision-chain, identity and revocation controls, cross-checked against the deployed stack on 2026-11-12. One is live-reachable today; one is latent.
+
+### Fixed
+
+- **A revoked agent could never be reinstated.** `Agent.transitionTo()` (`src/api/models/Agent.js:140-160`) defined `REVOKED` as admitting only `DECOMMISSIONED`, with no path back to `ACTIVE`. Both reinstate paths call `transitionTo(AgentState.ACTIVE)`: `src/agents/registry.js:186` and `src/agents/revocation-cache.js:161`. The revocation-cache path is the live one, reached by `POST /api/identity-v2/:agentId/reinstate` (`src/api/routes/identity-v2.js:379`); the thrown `Invalid state transition from revoked to active` escapes to the route's catch-all and returns HTTP 500. The registry path wraps the call in `try/catch` and degrades to `{ success: false, error }` — a silent failure. Revocation was therefore a one-way door: a revoked agent — including one revoked by a false positive — could never return to service. `REVOKED` now admits `ACTIVE` as well, matching the `SUSPENDED` row, which already permitted `-> ACTIVE`. `DECOMMISSIONED` remains terminal. Reinstatement remains an audited event (`AGENT_REINSTATED`), and the revocation-cache entry and blast-radius penalty are cleared as before (`src/agents/revocation-cache.js:168,171`).
+- **`registry.verify()` compared a PBKDF2 hash against a raw credential, so it could never succeed.** `src/agents/registry.js:257` used `agent.credentials.current === credential`, but `credentials.current` holds the *hash*, not the plaintext — `Agent.generateCredential()` stores `hashCredential(rawCredential)` and returns the raw value only for initial provisioning (`src/api/models/Agent.js:103-116`). The comparison therefore evaluated a `salt:hash` string against a raw hex credential and was always false. The correct comparison already existed on the model as `Agent.checkCredential()` (`src/api/models/Agent.js:129-131`), and `src/api/routes/agents.js:454` already used it. The registry now uses the same verifier. **This defect was latent:** the only caller is `src/agents/identity-provider.js:62`, and the v1 identity provider is not instantiated anywhere at runtime — the deployed stack uses `identity-provider-v2.js`, which verifies JWTs and never calls `registry.verify()`. No live request was affected. The defect was that the registry exported a credential-verification function that could not succeed, and that wiring v1 back up would reject every valid credential with `Invalid agent credentials` — indistinguishable from an invalid one.
+
+### Added
+
+- `test/unit/agent-lifecycle.test.js` — 10 regression tests covering the transition table (`REVOKED -> ACTIVE`, `REVOKED -> DECOMMISSIONED`, `DECOMMISSIONED` terminal, `SUSPENDED -> ACTIVE`), `registry.verify()` against correct/incorrect/non-`ACTIVE`/unknown agents, the hash-not-plaintext storage invariant, and a guard that the suite does not leak test agents into the repository's runtime data file. The tests were verified to **fail** against the unfixed code (2 failures) and pass against the fixed code. `test/` is not in the npm `files` whitelist, so the file does not ship in the tarball.
+
+### Notes
+
+- The defect audit that produced these fixes also **confirmed** that the claims corrected in `2.12.2` are correct as published: the README tier ladder, the `src/policies/engine.js` enforcement path, the pheromone-trail wording, and the "cascade is specified, not implemented" statement all match the source. No README change is required in this release.
+- `credentials.previous` is still stored on rotation (`src/api/models/Agent.js:110`) and still never consulted. Credential rotation is a cutover, not an overlap: the previous value stops verifying immediately. A bounded overlap window during rotation remains unbuilt and is not claimed here.
+- The `npm test` baseline is unchanged by this release. The pre-existing `test/unit/` failures and the hang tracked in Gitea issue #2 are present before and after; see the test evidence below.
+
+### Test evidence
+
+- **New suite:** `test/unit/agent-lifecycle.test.js` — 10 tests, 10 pass, 0 fail. Against the unfixed source the same file reports 8 pass / 2 fail, with the two failures being exactly `REVOKED -> ACTIVE is an allowed transition` and `registry.verify accepts the correct raw credential`. The other 8 pass in both runs, which confirms they are not tautological.
+- **Regression baseline.** The `test/unit/` suite was measured twice on an **identical file set and an identical environment**: the same commit (`c5998434`) was checked out twice, and the only difference between the two runs was that the two fixes above were reverted in one of them. The file set is the 56 test files present in the working tree, so the comparison is not skewed by untracked or pre-existing test files.
+
+  | | pass | fail | hanging files |
+  |---|---|---|---|
+  | fixes reverted (baseline) | 751 | 56 | 5 |
+  | fixes applied | 815 | 54 | 5 |
+  | **delta** | **+64** | **−2** | **0** |
+
+  **Zero new failures.** The two failures that disappear are the two new regression tests failing against the reverted code — that is the fix being detected, not a pre-existing defect being masked. The 5 hanging files are identical in both runs: `test/unit/gateway/audit-routes.test.js`, `test/unit/gateway/cors-allowlist.test.js`, `test/unit/gateway/server.test.js` and two others. The 54 remaining failures are pre-existing and unrelated to this change — they sit in the RL pipeline, BLOCK-13 schema guards and coordinator-routing suites, and are already tracked in Gitea issue #2.
+
+  A first comparison against a pristine worktree of `origin/main` was discarded: that worktree had a different file set and a different module-resolution environment, and reported differences that were artefacts of the comparison rather than of this change. The figures above come from the controlled A/B run.
+
 ## [2.12.2] — 2026-11-11 — README capability claims corrected to match the source
 
 **Release type:** patch. Documentation only. No runtime behaviour change for a correctly deployed stack, and no figure or coverage number changed. This release corrects claims that the published `README.md` — which ships in the npm tarball and is served from the public GitHub README — asserted but the source does not support.

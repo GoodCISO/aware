@@ -29,13 +29,57 @@
 //   rows: Array<{ prompt, chosen, rejected }> where each is a
 //         [{role: 'user'|'assistant', content: string}] messages array.
 //
-//   skipped: { lowGap, duplicate, invalid } — counts of records dropped
-//            for each reason. Surfaced in trainer's debug log.
+//   skipped: { lowGap, duplicate, invalid, mixedInstrument, nonIndependentJudge }
+//            — counts of records dropped for each reason. Surfaced in
+//            trainer's debug log.
 //
 // The function is pure — no I/O, no clock, no randomness. Safe to call
 // from tests, from the trainer's main loop, or from a one-off CLI script.
 
+import { mayJudgeGate } from './judge-role.js';
+
 const SUPPORTED_FORMATS = new Set(['messages']);
+
+// Score-instrument parity (2026-11-11, kanban t_99423c45).
+//
+// The producer writes `prm_score_source` on each side of a preference pair
+// so the two are self-describing. Untagged sides predate that field; for
+// those we fall back to the legacy heuristic-signature check (the old
+// length heuristic only ever emitted 0.4 / 0.5 / 0.6 / 0.75).
+const JUDGE_SCORE_SOURCE = 'prm_judge';
+const LEGACY_HEURISTIC_BUCKETS = new Set([0.4, 0.5, 0.6, 0.75]);
+
+/**
+ * @param {number} score
+ * @returns {boolean} true when `score` is one of the legacy heuristic buckets
+ */
+function isLegacyHeuristicBucket(score) {
+  return LEGACY_HEURISTIC_BUCKETS.has(score);
+}
+
+/**
+ * True when both sides of a pair carry scores produced by the same
+ * instrument, and therefore their difference is meaningful.
+ *
+ * @param {Object} chosen
+ * @param {Object} rejected
+ * @returns {boolean}
+ */
+export function sameScoreInstrument(chosen, rejected) {
+  const chosenSource = chosen?.prm_score_source;
+  const rejectedSource = rejected?.prm_score_source;
+  if (typeof chosenSource === 'string' || typeof rejectedSource === 'string') {
+    return chosenSource === rejectedSource;
+  }
+  // Both untagged — legacy record. Detect the exact legacy signature:
+  // chosen on a heuristic bucket while rejected is on any other value.
+  const cs = chosen?.prm_score;
+  const rs = rejected?.prm_score;
+  if (typeof cs === 'number' && typeof rs === 'number') {
+    if (isLegacyHeuristicBucket(cs) && !isLegacyHeuristicBucket(rs)) return false;
+  }
+  return true;
+}
 
 /**
  * @typedef {Object} PreferenceRecord
@@ -64,6 +108,13 @@ const SUPPORTED_FORMATS = new Set(['messages']);
  * @property {number} lowGap
  * @property {number} duplicate
  * @property {number} invalid
+ * @property {number} mixedInstrument — pairs whose two sides carry scores
+ *           from different instruments (the gap would be meaningless)
+ * @property {number} nonIndependentJudge — pairs whose judge was not
+ *           independent of the candidate (their verdict may not gate)
+ * @property {number} inverted — pairs whose chosen side scored at or below
+ *           their rejected side (the pair's labels contradict its own
+ *           numbers — a defect in the PAIR, not a judgement about quality)
  */
 
 /**
@@ -97,7 +148,14 @@ export function toDpoDataset(records, options = {}) {
   const dedupeByHash = options.dedupeByHash !== false; // default true
 
   const rows = [];
-  const skipped = { lowGap: 0, duplicate: 0, invalid: 0 };
+  const skipped = {
+    lowGap: 0,
+    duplicate: 0,
+    invalid: 0,
+    mixedInstrument: 0,
+    nonIndependentJudge: 0,
+    inverted: 0,
+  };
   const seenHashes = new Set();
 
   for (const rec of records) {
@@ -113,13 +171,67 @@ export function toDpoDataset(records, options = {}) {
     }
     const chosenScore = rec?.chosen?.prm_score;
     const rejectedScore = rec?.rejected?.prm_score;
-    // minScoreGap filter (matches rl-pipeline's toDpoDataset convention
-    // from the original Status.md spec). Records with missing scores
-    // pass this gate — the operator's outcome-filter.js handles the
-    // "missing scores" policy separately (see ADR (internal) Repair 1).
+    // Instrument parity (2026-11-11, kanban t_99423c45). The gap below is
+    // only a preference signal when both sides were produced by the SAME
+    // instrument. A surrogate (e.g. the legacy length heuristic) scored
+    // against a judge score yields a bogus gap — the exact defect that
+    // dropped better-refined pairs as "inverted" (74,840 of 329,558 live
+    // pairs). Skip such pairs here too, so the rule holds even when the
+    // operator runs the outcome filter with rule='noop'.
+    // JUDGE ROLE (2026-11-17, kanban t_155a95a1).
+    //
+    // The assembler's gap check is a QUALITY certification: "this pair is
+    // good enough to train on". Only a judge that is independent of the
+    // candidate AND declared with a gating role may certify that
+    // (04-ai-product-evaluation.md:27-43, :187-190). For every other judge
+    // the gap is a DIAGNOSTIC: the pair is admitted, the gap is not a reason
+    // to exclude it, and the signal is preserved on the record for the
+    // future independent judge and the human re-read slice.
+    //
+    // This is checked FIRST because it is the coarser question: a pair the
+    // judge may not certify is not excluded on a gap computed by that judge.
+    // The score-instrument PARITY check below is NOT affected -- it is about
+    // the two sides being comparable at all (t_99423c45), not about
+    // certifying quality, and it must keep running.
+    //
+    // NOTE: the counter for a demoted judge is incremented only when the
+    // pair is ADMITTED (see below, just before the row is pushed). Counting
+    // it here would report a DROPPED pair as "admitted on a diagnostic
+    // signal" in the trainer's rowsDiagnostic (src/trainer/index.js) --
+    // the operator would see a diagnostic count for pairs that never
+    // reached the training set.
+    const judgeMayGate = mayJudgeGate(rec);
     if (typeof chosenScore === 'number' && typeof rejectedScore === 'number') {
+      if (!sameScoreInstrument(rec.chosen, rec.rejected)) {
+        skipped.mixedInstrument += 1;
+        continue;
+      }
       const gap = chosenScore - rejectedScore;
-      if (gap + 1e-9 < minScoreGap) {
+      // DIRECTIONALITY (inverted pair) — 2026-11-17, kanban t_ebf7e27f.
+      //
+      // A pair whose chosen side scores at or BELOW its rejected side
+      // contradicts its own labels: the "rejected" attempt is the better one
+      // by the numbers on the record. That is a defect in the PAIR, not a
+      // judgement about quality -- the same reasoning the outcome filter
+      // gives at src/trainer/outcome-filter.js ("the pair's labels contradict
+      // its own numbers, which is a defect in the PAIR, not a judgement
+      // about quality"). It is therefore NOT demoted with the gap
+      // magnitude: it stays OUTSIDE the judgeMayGate guard, so it holds for
+      // every judge, including a same-family (non-gating) one.
+      //
+      // Before this check the assembler dropped an inverted pair only as a
+      // side effect of the magnitude gate, so the demotion of that gate
+      // (t_155a95a1) silently stopped dropping inverted pairs -- while the
+      // outcome filter kept dropping them. The two paths disagreed, and the
+      // `noop` filter rule let inverted pairs into the training set.
+      if (gap <= 0) {
+        skipped.inverted += 1;
+        continue;
+      }
+      // GAP MAGNITUDE — a quality certification, so it is demoted for a
+      // judge that may not gate (t_155a95a1). The signal is not lost: it
+      // stays on the record and the filter reports it as a diagnostic.
+      if (judgeMayGate && gap + 1e-9 < minScoreGap) {
         skipped.lowGap += 1;
         continue;
       }
@@ -132,6 +244,12 @@ export function toDpoDataset(records, options = {}) {
         continue;
       }
       seenHashes.add(rec._content_hash);
+    }
+    // The pair is ADMITTED. Only now is the demoted-judge signal counted,
+    // because it is a count of pairs admitted WITHOUT their score being
+    // allowed to gate -- not a count of pairs the assembler looked at.
+    if (!judgeMayGate) {
+      skipped.nonIndependentJudge += 1;
     }
     rows.push({
       prompt: [{ role: 'user', content: rec.problem }],

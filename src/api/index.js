@@ -253,6 +253,28 @@ class APIGateway {
       this._tierPromotionsRouter(req, res, next);
     });
 
+    // AWARE v2: POST /v2/mandates — the RiskMandate acceptance contract
+    // (openapi.yaml#/paths/~1v2~1mandates). Same root-path mount as
+    // /v2/tier-promotions and the same bearer-auth gate (the upstream
+    // `this.app.use(authenticateToken)`), so a request without a token
+    // gets 401 before it ever reaches the handler. The tier-promotions
+    // router above does not match /v2/mandates, so Express falls through
+    // to this mount. Lazy-require for the same reason as the sibling.
+    this.app.use('/v2', (req, res, next) => {
+      if (!this._mandatesRouter) {
+        try {
+          const { createMandatesRouter } = require('../v2/mandates_handler');
+          this._mandatesRouter = createMandatesRouter();
+        } catch (err) {
+          return res.status(503).json({
+            success: false,
+            error: 'v2 mandates routes unavailable: ' + err.message,
+          });
+        }
+      }
+      this._mandatesRouter(req, res, next);
+    });
+
     // SC-MOD-015: Mount the previously-orphaned route files.
     // five (compliance.js, tools.js) export Express routers directly
     // and mount as-is. The other three (identity-v2.js, audit.js,

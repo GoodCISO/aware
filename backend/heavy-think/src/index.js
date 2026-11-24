@@ -8,6 +8,8 @@ import { refine } from './refine.js';
 import { scoreWithPRM } from './prm.js';
 import { verify } from './verify.js';
 import { writePreferencePair, shouldSkipDuplicate } from './preference-pair.js';
+import { describeJudge } from './judge-role.js';
+import { resolveJudgeClient, resolveEffectiveJudgeModel, resolveServedJudgeModel, resolveClientServedModel, JUDGE_UNAVAILABLE_CODE } from './judge-client.js';
 import { defaultKForTaskType, K_CONFIGS } from './config.js';
 
 /**
@@ -21,6 +23,12 @@ import { defaultKForTaskType, K_CONFIGS } from './config.js';
  * @param {Object} [options.verification] - { method: 'exec'|'test_suite'|'citation_check'|'kg_consistency', ...args }
  * @param {Object} [options.prm] - PRM judge config (model override, custom prompt)
  * @param {Object} [options.client] - LLM client (for test injection). Must implement { generate(prompt, opts) }
+ * @param {Object} [options.judgeClient] - INDEPENDENT judge client. When present every judge
+ *   call (PRM scoring, refined-trace PRM scoring, the llm-judge verification) is served by
+ *   it and NEVER by options.client. When absent the producer's client is the judge (legacy
+ *   behaviour) and the pair record records that fact, so a same-family judge is never
+ *   mistaken for an independent one. A configured judge client that is UNAVAILABLE fails
+ *   closed — it never falls back to the candidate's model.
  * @param {string} [options.preferencePairPath] - JSONL output path; if omitted, no pair is written
  * @param {Object} [options.cache] - Optional PRM score cache (AWARE 2.0 Phase 2.2).
  *   Must implement { buildCacheKey, getCachedScore, putCachedScore }.
@@ -30,6 +38,7 @@ import { defaultKForTaskType, K_CONFIGS } from './config.js';
  * @returns {Promise<{
  *   refined_trace: string,
  *   confidence: number,
+ *   refined_prm_score: number|null,   // judge score of the refined trace
  *   attempts: Array<{ reasoning: string, prm_score: number, selected: boolean }>,
  *   verification: { passed: boolean, method: string, details?: any, duration_ms: number },
  *   cost: { attempts_usd: number, refinement_usd: number, judge_usd: number },
@@ -49,6 +58,48 @@ export async function heavy_think(options) {
   const verification = options.verification || null;
   const prmConfig = options.prm || {};
   const client = options.client;  // injected for tests; production: build default minimax client
+  // The INDEPENDENT judge client (kanban t_89720a07). options.judgeClient
+  // is the separate judge client; when it is absent the producer's client
+  // is the judge (legacy behaviour) and the pair record records that fact,
+  // so the pair is never mistaken for an independently judged one.
+  const judgeClient = options.judgeClient || null;
+  // WHICH client serves the judge, and WHICH model it uses.
+  const judgeRoute = resolveJudgeClient({ client, judgeClient });
+  // The model that is INTENDED to serve every judge call in this heavy_think
+  // call: `prmConfig.model || judgeRoute.model`. The per-call override
+  // travels into the generate options, and the clients that HONOUR
+  // `opts.model` serve it over their own default — so for those clients the
+  // override decides which model produces the score. Resolved ONCE, here, so
+  // the cache key, the score's own `judge_model` and the pair record's judge
+  // tags cannot disagree about which model produced the verdict (kanban
+  // t_dc053dc2).
+  //
+  // The cache key MUST use this model too: a key built from the serving
+  // client's default while the score is produced by the override would
+  // serve a score produced by one model under a record that names another.
+  const intendedJudgeModel = resolveEffectiveJudgeModel({
+    prmConfig,
+    judgeRoute,
+  });
+  // The model that will ACTUALLY serve, when the judge client can say so
+  // BEFORE the call (kanban t_49d955b7). A client that ignores `opts.model`
+  // — AWARE's Ollama judge did — would otherwise have the cache key built
+  // from the override while the score came from the client's own model: a
+  // score produced by one model served under a key that names another.
+  //
+  // This is the PRE-CALL half of the served-model contract. The post-call
+  // half (`served_model` on the score) is authoritative and is preferred
+  // when the record is written.
+  const judgeGenOpts = {
+    task_type,
+    phase: 'prm_score',
+    ...(prmConfig.model ? { model: prmConfig.model } : {}),
+  };
+  const effectiveJudgeModel = resolveClientServedModel({
+    client: judgeRoute.client,
+    genOpts: judgeGenOpts,
+    fallback: intendedJudgeModel,
+  });
   const pairPath = options.preferencePairPath || null;
   const cache = options.cache || null;  // Phase 2.2 — optional PRM score cache
   // MR-HIGH-002 fix: forward system_prompt through the heavy_think pipeline
@@ -74,10 +125,11 @@ export async function heavy_think(options) {
   const scored = await Promise.all(
     parallelResult.attempts.map(async (attempt) => {
       let score;
+      try {
       if (cache) {
         const key = cache.buildCacheKey({
           problem, reasoning: attempt.reasoning, task_type, context,
-          prm_model: client?.model || 'minimax-M3',
+          prm_model: effectiveJudgeModel || 'minimax-M3',
         });
         const hit = await cache.getCachedScore(key);
         if (hit) {
@@ -86,7 +138,7 @@ export async function heavy_think(options) {
         } else {
           cacheStats.misses++;
           score = await scoreWithPRM({
-            problem, reasoning: attempt.reasoning, task_type, context, prmConfig, client,
+            problem, reasoning: attempt.reasoning, task_type, context, prmConfig, client, judgeClient,
           });
           // Fire-and-forget cache write — must not block the scoring path.
           // Cache errors are silently swallowed inside putCachedScore.
@@ -94,8 +146,23 @@ export async function heavy_think(options) {
         }
       } else {
         score = await scoreWithPRM({
-          problem, reasoning: attempt.reasoning, task_type, context, prmConfig, client,
+          problem, reasoning: attempt.reasoning, task_type, context, prmConfig, client, judgeClient,
         });
+      }
+      } catch (err) {
+        // A CONFIGURED but unavailable judge fails CLOSED (kanban
+        // t_89720a07): the score is lost rather than taken from the
+        // candidate's client. The attempt keeps a null score so the pair
+        // records the loss instead of silently scoring the candidate
+        // with itself.
+        if (!err || err.code !== JUDGE_UNAVAILABLE_CODE) throw err;
+        score = {
+          score: null,
+          cost_usd: 0,
+          judge_source: 'judge_unavailable',
+          judge_model: effectiveJudgeModel,
+          raw: '',
+        };
       }
       return { ...attempt, prm_score: score.score, prm_meta: score };
     })
@@ -111,15 +178,139 @@ export async function heavy_think(options) {
     problem, best_attempt: bestInitial.reasoning, task_type, context, client, system_prompt,
   });
 
+  // 4b. JUDGE-SCORE THE REFINED TRACE — the SAME instrument that scored
+  //     the initial attempts.
+  //
+  // src/prm.js documents K+1 PRM calls per heavy_think call (K attempts + 1
+  // for the refinement); that call was never actually made, and the
+  // refinement's score was faked with a length heuristic instead. The
+  // trainer's `min_score_gap` gate then subtracted a heuristic value
+  // (capped at 0.75) from a judge value (routinely 0.8-1.0), so the gap
+  // was systematically negative and better-refined pairs were dropped as
+  // "PRM-inverted" (kanban t_99423c45).
+  //
+  // If the judge call fails we do NOT fall back to a heuristic: the pair is
+  // written with prm_score=null and prm_score_source='unavailable', and the
+  // trainer's existing missing-scores policy drops it. A missing score is
+  // honest; a fake score silently corrupts the training set.
+  let refinedJudge = null;
+  try {
+    if (cache) {
+      const key = cache.buildCacheKey({
+        problem, reasoning: refinement.refined_trace, task_type, context,
+        prm_model: effectiveJudgeModel || 'minimax-M3',
+      });
+      const hit = await cache.getCachedScore(key);
+      if (hit) {
+        cacheStats.hits++;
+        refinedJudge = { ...hit, cost_usd: 0 };  // cached reads have zero PRM cost
+      } else {
+        cacheStats.misses++;
+        refinedJudge = await scoreWithPRM({
+          problem, reasoning: refinement.refined_trace, task_type, context, prmConfig, client, judgeClient,
+        });
+        cache.putCachedScore(key, refinedJudge).catch(() => { /* ignore */ });
+      }
+    } else {
+      refinedJudge = await scoreWithPRM({
+        problem, reasoning: refinement.refined_trace, task_type, context, prmConfig, client, judgeClient,
+      });
+    }
+  } catch (err) {
+    refinedJudge = null;
+  }
+  const refinedJudgeCost = refinedJudge?.cost_usd || 0;
+
   // 5. VERIFICATION (optional)
   let verificationResult = { passed: true, method: 'none', duration_ms: 0 };
   if (verification) {
+    // `client` and `problem` are forwarded so LLM-based verification methods
+    // (e.g. 'llm-judge') can run. `client` is the judge itself; `problem` gives
+    // the judge the task the trace was produced for — without it the judge can
+    // only assess internal consistency, not correctness against the task.
     verificationResult = await verify({
-      trace: refinement.refined_trace, verification, context,
+      trace: refinement.refined_trace, verification, context, client, judgeClient, problem,
     });
   }
 
   // 6. WRITE PREFERENCE PAIR (only if not duplicate)
+  //
+  // Judge identity + role (kanban t_155a95a1). The pair must say WHO judged
+  // it and WHAT ROLE that verdict plays before anything downstream is allowed
+  // to gate on it (04-ai-product-evaluation.md:35-36, :187-190). The role is
+  // 'diagnostic' unless the judge is an independent model family AND the
+  // caller declared a gating role.
+  //
+  // THE EFFECTIVE JUDGE MODEL (kanban t_dc053dc2). The model that is
+  // INTENDED to serve the score is `prmConfig.model || judgeRoute.model`:
+  // the per-call override travels into the generate options, and the
+  // clients that HONOUR `opts.model` serve it over their own default, so
+  // for those clients the override really does decide which model produced
+  // the verdict.
+  //
+  // A client that does NOT honour `opts.model` serves its OWN model, so
+  // the intended model is not necessarily the served one (kanban
+  // t_49d955b7). The judge tags must therefore be computed from the SERVED
+  // model — what the client reported it actually did on the wire — and not
+  // from the intended model, nor from the serving client's default.
+  //
+  // Before this, the override was honoured only when a `judgeClient` was
+  // configured. In the no-`judgeClient` branch — AWARE's production default,
+  // since a judge client is built only when AWARE_JUDGE_MODEL is set — the
+  // override changed the serving model while the record named the
+  // producer's model. Two consequences, both on the fields the trainer
+  // trusts (`mayJudgeGate()` in AWARE's src/trainer/judge-role.js):
+  //   * `prm_score_judge_model` was a FALSE statement about which model
+  //     produced the score; and
+  //   * the independence verdict was computed against the WRONG model, so a
+  //     genuinely independent override (`qwen3-32b`) was not recognised as
+  //     independent and the override was silently useless for its purpose.
+  //
+  // The effective model is resolved through the ONE shared helper
+  // (`resolveEffectiveJudgeModel`), the same one the score's own
+  // `judge_model` uses, so the record can never name a model that did not
+  // serve the score.
+  //
+  // FAIL CLOSED ON A SAME-FAMILY JUDGE. `describeJudge()` compares model
+  // FAMILIES (kanban t_2a91cc4b), so a same-family effective judge — the
+  // identical model, a cheaper sibling such as `MiniMax-M3` next to
+  // `MiniMax-M3.1-Flash`, or the AWARE-trained LoRA artefact — is
+  // demoted to 'diagnostic' with `prm_score_independent=false`, whatever
+  // role the caller requested. A per-call override must not be able to
+  // RAISE a judge's authority above what the family rule allows.
+  //
+  // THE CHOICE (AC4 of t_dc053dc2): DEMOTE THE VERDICT, DO NOT REFUSE THE
+  // CALL. The override is honoured for SCORING — an operator may
+  // legitimately want a cheaper judge — and only the verdict's AUTHORITY is
+  // demoted. 04-ai-product-evaluation.md:240-243 is about the verdict's
+  // authority ("Same family -> the verdict is a DIAGNOSTIC, never a launch
+  // gate ... Run it again with an independent judge before it gates
+  // anything"), not about whether the verdict may be computed; refusing the
+  // call would discard a score the operator asked for without making the
+  // verdict any safer.
+  //
+  // `effectiveJudgeModel` is resolved once, near the top of this function
+  // (see `resolveEffectiveJudgeModel` above), so the cache key, the score's
+  // own `judge_model` and these tags all name the same model.
+  //
+  // THE SERVED MODEL WINS (kanban t_49d955b7). `effectiveJudgeModel` is the
+  // INTENDED model. A judge client that ignores `opts.model` serves its OWN
+  // model, so the score carries `served_model` — what the client actually
+  // did on the wire. The record's judge tags are computed from THAT, so the
+  // record cannot name a model that did not serve and the independence
+  // verdict cannot be computed against the wrong model.
+  const servedJudgeModel = resolveServedJudgeModel({
+    scores: [
+      refinedJudge,
+      ...scored.map((a) => a.prm_meta),
+    ],
+    fallback: effectiveJudgeModel,
+  });
+  const judge = describeJudge({
+    candidateModel: client?.model || null,
+    judgeModel: servedJudgeModel,
+    role: prmConfig.role || null,
+  });
   let pair_written = false;
   if (pairPath) {
     const contentHash = hashAttempt(problem, bestInitial.reasoning, refinement.refined_trace);
@@ -131,8 +322,36 @@ export async function heavy_think(options) {
           ts: new Date().toISOString(),
           problem,
           task_type,
-          chosen: { reasoning: refinement.refined_trace, prm_score: refinement.refined_score },
-          rejected: { reasoning: bestInitial.reasoning, prm_score: bestInitial.prm_score },
+          // Judge role + independence (kanban t_155a95a1). The verdict's
+          // ROLE is declared on the record so nothing downstream can gate
+          // on a score whose role was never named. See src/judge-role.js.
+          prm_score_role: judge.prm_score_role,
+          prm_score_independent: judge.prm_score_independent,
+          prm_score_judge_model: judge.prm_score_judge_model,
+          // WHICH client served the judge (kanban t_89720a07): 'judge' when
+          // an independent judge client served the score,
+          // 'producer_fallback' when the producer's own client did — i.e.
+          // the verdict is same-family by construction.
+          prm_score_judge_client_source: judgeRoute.source,
+          chosen: {
+            reasoning: refinement.refined_trace,
+            // Judge-sourced — the SAME instrument as `rejected.prm_score`.
+            prm_score: refinedJudge ? refinedJudge.score : null,
+            prm_score_source: refinedJudge ? 'prm_judge' : 'unavailable',
+            // The refinement's own confidence (provider-reported, or the
+            // legacy length heuristic). NOT a PRM score — never compare it
+            // against a judge score.
+            refinement_confidence: refinement.refinement_confidence,
+            ...judge,
+          },
+          rejected: {
+            reasoning: bestInitial.reasoning,
+            prm_score: bestInitial.prm_score,
+            // 'unavailable' when the judge call failed outright (a missing
+            // score is honest; a fake score corrupts the training set).
+            prm_score_source: bestInitial.prm_score === null ? 'unavailable' : 'prm_judge',
+            ...judge,
+          },
           all_attempts: attemptsWithSelection.map(a => ({
             reasoning: a.reasoning,
             prm_score: a.prm_score,
@@ -146,7 +365,7 @@ export async function heavy_think(options) {
           cost: {
             attempts_usd: parallelResult.cost_usd || 0,
             refinement_usd: refinement.cost_usd || 0,
-            judge_usd: scored.reduce((s, a) => s + (a.prm_meta?.cost_usd || 0), 0),
+            judge_usd: scored.reduce((s, a) => s + (a.prm_meta?.cost_usd || 0), 0) + refinedJudgeCost,
           },
         },
         contentHash,
@@ -159,12 +378,14 @@ export async function heavy_think(options) {
   return {
     refined_trace: refinement.refined_trace,
     confidence: refinement.confidence,
+    // Judge score of the refined trace (null when the judge call failed).
+    refined_prm_score: refinedJudge ? refinedJudge.score : null,
     attempts: attemptsWithSelection,
     verification: verificationResult,
     cost: {
       attempts_usd: parallelResult.cost_usd || 0,
       refinement_usd: refinement.cost_usd || 0,
-      judge_usd: scored.reduce((s, a) => s + (a.prm_meta?.cost_usd || 0), 0),
+      judge_usd: scored.reduce((s, a) => s + (a.prm_meta?.cost_usd || 0), 0) + refinedJudgeCost,
     },
     pair_written,
     pair_path: pairPath,        // absolute path to the JSONL line, or null if not written

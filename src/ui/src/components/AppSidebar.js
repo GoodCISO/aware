@@ -8,6 +8,7 @@ import PowerOffIcon from '@mui/icons-material/PowerSettingsNew';
 import WarningIcon from '@mui/icons-material/Warning';
 import VerifiedUserIcon from '@mui/icons-material/VerifiedUser';
 import HistoryIcon from '@mui/icons-material/History';
+import PeopleAltIcon from '@mui/icons-material/PeopleAlt';
 
 const DRAWER_WIDTH = 260;
 
@@ -19,6 +20,10 @@ const menuItems = [
   { text: 'Anomaly Detection', icon: <WarningIcon />, path: '/anomalies' },
   { text: 'Compliance Mapping', icon: <VerifiedUserIcon />, path: '/compliance' },
   { text: 'Audit Trail', icon: <HistoryIcon />, path: '/audit' },
+  // OHI (Operator / Human Identity) trust. Deliberately NOT "Agent
+  // Identity" -- that row above is the NHI (agent) screen, and an operator
+  // screen sharing its label is how a human gets mistaken for an agent.
+  { text: 'Operators', icon: <PeopleAltIcon />, path: '/operators' },
 ];
 
 const AppSidebar = () => {

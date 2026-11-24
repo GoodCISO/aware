@@ -35,6 +35,46 @@ class PolicyEngine {
     this.policyStore = getPolicyStore(config.policyStore);
     this.defaultDecision = config.defaultDecision || DEFAULT_DECISION;
     this.frequencyWindows = new Map(); // Track frequency windows
+
+    // ── Extension point ──
+    // The registry is optional. With none registered, evaluate() is the
+    // untouched prototype method and this is a pure pass-through.
+    //
+    // The wrapper is installed here rather than at each `return` site inside
+    // evaluate() because evaluate() has many internal return points, and a
+    // per-return hook would silently miss any return added later.
+    this.extensions = config.extensions || null;
+    if (this.extensions) {
+      const rawEvaluate = this.evaluate.bind(this);
+      this.evaluate = (request) => {
+        const result = rawEvaluate(request);
+        // Fire and forget: an extension must never delay or alter a policy
+        // decision. The registry contains failures, so a throwing extension
+        // is recorded rather than propagated.
+        // The extension receives a DEEP COPY. It is an observer, not a
+        // participant: handing it the live object would let it rewrite the
+        // verdict in place, which would be a policy bypass. (Found by the
+        // contract test in test/unit/extension/extension-contract.test.js,
+        // which asserts the extension CANNOT change the decision.)
+        let snapshot;
+        try {
+          snapshot = {
+            request: structuredClone(request),
+            decision: structuredClone(result),
+          };
+        } catch (_e) {
+          // If the decision carries something structuredClone cannot handle,
+          // skip the notification rather than risk handing over a live
+          // reference. An extension that misses one event is better than an
+          // extension that can flip a verdict.
+          return result;
+        }
+        Promise.resolve(
+          this.extensions.dispatch('onDecision', snapshot)
+        ).catch(() => {});
+        return result;
+      };
+    }
   }
 
   /**
@@ -235,6 +275,18 @@ class PolicyEngine {
 
   /**
    * Pre-authorization check (for UI display)
+   *
+   * This DELEGATES to `evaluate()` rather than reimplementing the decision.
+   * A previous implementation computed its own answer from the risk level
+   * alone (`riskLevel !== 'HIGH' && riskLevel !== 'CRITICAL'`), which made the
+   * preview STRICTLY MORE PERMISSIVE than the decision it previewed: in a
+   * default-deny system, a reader who took the preview for the decision would
+   * believe low-risk tools were allowed when `evaluate()` denies them.
+   *
+   * `evaluate()` has no side effects — it reads the policy store and the tool
+   * catalogue and returns a decision — so delegating is safe for a read-only
+   * preview endpoint and guarantees the two cannot drift apart.
+   *
    * @param {string} agentId - Agent ID
    * @param {string} tool - Tool name
    * @returns {Object} Preview of what decision would be
@@ -243,24 +295,18 @@ class PolicyEngine {
     const policies = this.policyStore.findForTool(agentId, tool);
     const riskLevel = this.toolCatalog.getRiskLevel(tool);
     const toolRequiresApproval = this.toolCatalog.requiresApproval(tool);
-    
-    if (policies.length === 0) {
-      return {
-        wouldBeAllowed: riskLevel !== 'HIGH' && riskLevel !== 'CRITICAL',
-        riskLevel,
-        requiresApproval: toolRequiresApproval,
-        matchingPolicies: [],
-        reason: 'No matching policies'
-      };
-    }
-    
-    const topPolicy = policies[0];
+
+    const result = this.evaluate({ agentId, tool });
+
     return {
-      wouldBeAllowed: topPolicy.action === PolicyAction.ALLOW,
+      // `wouldBeAllowed` is derived from the SAME decision `evaluate()` would
+      // return, so the preview cannot disagree with the enforcement path.
+      wouldBeAllowed: result.decision === Decision.ALLOW,
+      decision: result.decision,
       riskLevel,
-      requiresApproval: toolRequiresApproval,
+      requiresApproval: result.requiresApproval ?? toolRequiresApproval,
       matchingPolicies: policies.map(p => p.policyId),
-      reason: `Top policy: ${topPolicy.policyId} (${topPolicy.action})`
+      reason: result.reason
     };
   }
 

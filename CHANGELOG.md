@@ -123,6 +123,36 @@ Note on vocabulary: the publication-granularity ladder is `P-0/P-1/P-2` and the 
 `publication.granularityLegacy` mapping `P-0→L-0`, `P-1→L-1`, matching the names the
 implementation cards use.
 
+## [2.12.4] — 2026-11-23 — ACS (Agent Control Specification) support
+
+**Release type:** minor. Adds a new capability — AWARE can act as a conformant Agent Control Specification policy decision engine, and can emit ACS receipts into its own evidence trail. No existing AWARE behaviour changes: the tool-limit, kill-switch and approval paths are untouched, and the adapter is additive.
+
+### Added
+
+- **ACS decision engine** (`src/acs/`), pinned to Agent Control Specification `v0.4.0-beta.2` (commit `b11ae38b1bd53d299789c1724f4f94f80a0c6540`). The adapter accepts the canonical five-member ACS policy input and validates it against the specification's own pinned JSON Schema. `pre_tool_call`, `post_tool_call` and `output` are enforced; the other five intervention points return a well-formed verdict and are recorded. Both `enforce` and `evaluate_only` modes are supported. The verdicts returned are the specification's normalised set — `allow`, `deny`, `transform` — with the `warn` and `escalate` intents normalised to an allow carrying a warning and a deny carrying an approval block, as the specification requires.
+- **ACS receipts in AWARE's evidence trail.** Every evaluation produces a payload-free ACS receipt, written into the existing hash-chained decision log (`src/audit/decision-logger.js`) and linked to the execution outcome through `parentDecisionId`. The trail runs policy → decision → action → result, and it is tamper-evident with AWARE's existing integrity mechanism — no new primitive was introduced.
+- **Human-approval seam** (`src/acs/approval.js`). AWARE previously represented approval as a boolean flag. The adapter adds a request/resolution seam with the Agent Hooks echo rule: a resolution whose `context_identity` does not match the request byte for byte is rejected, and the deny stands.
+- **Policy interoperability** (`src/acs/manifest.js`, `src/acs/policy-bridge.js`). AWARE imports ACS manifests including `extends` chains, and exports its policy binding as an ACS manifest through the specification's `custom` policy branch. The round trip AWARE → manifest → AWARE produces identical verdicts across a six-case corpus.
+- **Transform support** (`src/acs/transform.js`). A `transform` verdict carries a `$target`-rooted replacement, and the host applies it. The runtime returns the body unapplied, as the specification requires.
+- **Transports.** A library surface (`@goodciso/aware/src/acs`), an HTTP surface mounted at `/api/acs` behind the existing authentication, and a host adapter mirroring the Agent Governance Toolkit's `AgentControl`/`HostSession` pattern.
+- **A conformance gate** (`scripts/verify-acs-conformance.sh`, `npm run verify:acs`). The repository has no test-running CI on the public tree — its CI surface is the four-layer privacy filter — so the gate is the single command that proves the ACS conformance claims. It checks the vendored schemas against their pinned hashes, the artefact validations, the licence notice, the ACS suites, and that no adapter path catches an error and returns an `allow`.
+
+### Security
+
+- **Every ACS error path fails closed.** Any engine error, timeout, schema failure or unresolved approval produces a `deny` carrying a registered `runtime_error:*` reason. There is one constructor for that, `src/acs/fail-closed.js`, and it refuses a reason that is not registered. The fail-closed suite drives fault injections across every error path and asserts each one denies, and a source scan fails if any adapter module catches an error and returns an `allow`.
+
+  This is the guard for the class of defect reported as agent-control-spec issue #83, where a bundled dispatcher evaluated with an empty context and every context-gated `forbid` in the shipped policy library silently never fired — a policy that should have denied returned `allow`, with no error and no warning.
+
+- **The vendored specification schemas are pinned and drift-tested.** Every vendored schema's SHA-256 is recorded in `docs/acs/VENDORED.md` and asserted by `test/unit/acs/schema-drift.test.js`, so a specification change is a deliberate, reviewable act. The adapter is isolated behind `src/acs/`, so a version bump touches the pin, the vendored schemas and the drift-test hash table, and nothing else.
+
+### Notes
+
+- **The specification is a draft.** ACS `v0.4.0-beta.2` is a prerelease, and the release tag does not match the manifest version strings the pinned manifest schema accepts. The pin, the accepted manifest versions and the reasoning are recorded in `docs/acs/VERSION` and `docs/acs/DESIGN.md`.
+- **Rego and Cedar are not evaluated.** A manifest may declare a rego or cedar policy, and the adapter **refuses** such a manifest rather than pretending to evaluate it. AWARE binds through the `custom` policy branch. OPA remains an optional dependency: a user who does not use Rego does not need OPA.
+- **The conformance evidence is against the pinned specification schemas and the upstream reference example.** It is not evidence of interoperation with a live Microsoft Foundry or Agent Governance Toolkit deployment. `docs/acs/CONFORMANCE.md` section 11 lists what is explicitly not claimed.
+- **The upstream reference example is non-conformant in one respect.** The Agent Governance Toolkit's shipped `acs-email-tool` example returns the transform path `$policy_target.body`, a root the specification retired; a conformant runtime must fail that closed with `runtime_error:transform_invalid`. AWARE uses `$target.body`. The finding and the specification citation are in `docs/acs/DESIGN.md`.
+- **Licensing.** The vendored specification schemas are MIT-licensed and compatible with AWARE's Apache-2.0 licence. The upstream notices are in `docs/acs/LICENSE.acs`, the provenance of every vendored file is in `docs/acs/VENDORED.md`, and `NOTICE.md` records the notices. No Agent Governance Toolkit source code is included; it was consulted as a reference implementation only.
+
 ## [2.12.3] — 2026-11-12 — A revoked agent can be reinstated; `registry.verify()` compares correctly
 
 **Release type:** patch. Two runtime defects in agent lifecycle and credential verification are fixed. Both were found by a source audit of the decision-chain, identity and revocation controls, cross-checked against the deployed stack on 2026-11-12. One is live-reachable today; one is latent.

@@ -19,7 +19,7 @@
 #      bad `.env` BEFORE pulling images.
 #   3. Optional test smoke: with `--test`, runs `npm test` first and bails on
 #      any failure.
-#   4. Post-up: waits for the gateway + ollama + coordinator health endpoints
+#   4. Post-up: waits for the gateway + coordinator health endpoints
 #      to return 200, then prints an operator-action summary (URLs, logs paths,
 #      what to do next).
 #
@@ -37,13 +37,14 @@
 # What it verifies (in order):
 #   1. `.env` exists (or offers to copy from `deploy/env.example`)
 #   2. `docker`, `curl`, `node`, `npm` are on PATH
-#   3. `npm run config:validate` exits 0
-#   4. (Optional) `npm test` exits 0
-#   5. `docker compose config` validates
-#   6. `docker compose up -d` brings the stack up
-#   7. gateway `http://localhost:18080/health` returns 200 within 60s
-#   8. coordinator `http://localhost:38181/health` returns 200 within 60s
-#   9. ollama `http://localhost:11434/api/tags` returns 200 within 60s
+#   3. the credential store is found (ADR-083 — the compose file requires it;
+#      this script only locates it, it does NOT source it into the shell)
+#   4. `npm run config:validate` exits 0
+#   5. (Optional) `npm test` exits 0
+#   6. `docker compose config` validates
+#   7. `docker compose up -d` brings the stack up
+#   8. gateway `http://localhost:18080/health` returns 200 within 60s
+#   9. coordinator `http://localhost:18081/health` returns 200 within 60s
 #  10. summary printed with operator-action links
 
 set -euo pipefail
@@ -74,7 +75,16 @@ die() { err "$*"; exit 1; }
 # ─── Defaults ───────────────────────────────────────────────────────────
 COMPOSE_FILE="docker-compose.coordinator.yml"
 COMPOSE_PROJECT="aware-2"
-PROFILES=()              # extra `--profile X` flags
+# ADR-083: the `full` profile is the DEFAULT for this script, not an
+# opt-in. The script's own health checks below wait on the gateway
+# (http://localhost:18080/health) and the UI depends on the gateway, so
+# the script has always needed the `full` profile. It never passed it,
+# which made the documented single-command bring-up fail with
+#   service "aware-2-ui" depends on undefined service "gateway"
+# (ADR-083 fixed the underlying profile incoherence in the compose file
+# by putting aware-2-ui in the `full` profile alongside the gateway).
+# A caller passing --profile X still gets X ADDED to this list.
+PROFILES=("full")
 RUN_TESTS=0
 DO_TEARDOWN=0
 DO_LOGS=0
@@ -170,6 +180,26 @@ else
     ok ".env created from template (review and fill in real values)"
     info "  Edit $REPO_ROOT/.env before re-running for production use."
     info "  For a first smoke you can leave the defaults as-is."
+fi
+
+# ─── Pre-flight: credential store ───────────────────────────────────────
+# ADR-083. The compose file now reads the credential store ITSELF via
+# `env_file:` and requires it by default, so there is NO out-of-band
+# "source the file into your shell" step any more — that undocumented
+# step was the actual cause of the outage this change fixes.
+#
+# This script's job is only to LOCATE the store on this host and tell
+# Compose where it is. We never print a secret value.
+section "Pre-flight: credential store"
+CREDENTIALS_FILE="${AWARE_CREDENTIALS_FILE:-${HOME}/.aware/credentials.env}"
+if [ -f "$CREDENTIALS_FILE" ]; then
+    export AWARE_CREDENTIALS_FILE="$CREDENTIALS_FILE"
+    ok "credential store found at $CREDENTIALS_FILE"
+else
+    warn "credential store NOT found at $CREDENTIALS_FILE"
+    warn "  'up' will fail with a message naming that path and will NOT start any container."
+    warn "  Create it (chmod 600), point AWARE_CREDENTIALS_FILE at it, or set"
+    warn "  AWARE_CREDENTIALS_REQUIRED=*** for a deliberate soft boot."
 fi
 
 # ─── Config validation ──────────────────────────────────────────────────
@@ -276,8 +306,7 @@ wait_for_http() {
 }
 
 wait_for_http "http://localhost:18080/health" "gateway"    || die "gateway health check failed"
-wait_for_http "http://localhost:38181/health" "coordinator" || die "coordinator health check failed"
-wait_for_http "http://localhost:11434/api/tags" "ollama"   || warn "ollama not ready (continue without — model may not be pulled yet)"
+wait_for_http "http://localhost:18081/health" "coordinator" || die "coordinator health check failed"
 
 # ─── Summary ────────────────────────────────────────────────────────────
 section "AWARE 2.0 is up"
@@ -285,8 +314,8 @@ cat <<EOF
 
 ${C_BOLD}Services:${C_RESET}
   gateway      http://localhost:18080        (Telegram channel, A2A endpoint)
-  coordinator  http://localhost:38181        (Ollama + <secondary-llm> routing, conversation logger)
-  ollama       http://localhost:11434        (qwen2.5:7b local inference)
+  coordinator  http://localhost:18081        (provider routing, conversation logger)
+  ui           http://localhost:8081         (operator control plane)
   postgres     localhost:18432                (preference pairs, PRM cache, runs)
   redis        localhost:18379                (rate limiting, session state)
 EOF

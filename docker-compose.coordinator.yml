@@ -147,18 +147,29 @@ services:
       #   Error: Config: AWARE_COORDINATOR_TOKEN is required and must be >=32
       #   chars when NODE_ENV=production (SEC-002)
       #
-      # The value comes from the operator's credential store via env_file
-      # below, exactly as the coordinator receives it.
-      - AWARE_COORDINATOR_TOKEN=${AWARE_COORDINATOR_TOKEN:-}
-    # The gateway reads the same credential store as the coordinator. The
-    # file path is operator-supplied via AWARE_CREDENTIALS_FILE (default:
-    # redacted-credential-dir/credentials.env). Required: false makes this a
-    # soft dependency so a fresh dev box still starts the gateway - it just
-    # fails the SEC-002 token check above, which is the correct fail-closed
-    # behaviour.
+      # ADR-083: the token is NOT declared here. Compose merges
+      # `environment:` and `env_file:` into one container environment, and
+      # `environment:` WINS on every key it names. Declaring
+      # `AWARE_COORDINATOR_TOKEN=${AWARE_COORDINATOR_TOKEN:-}` here therefore
+      # did not merely duplicate the store's value - it OVERRODE it, so the
+      # env_file entry below was dead code for this key. The credential store
+      # is now the single source of truth; see the env_file block below.
+    # The gateway reads the same credential store as the coordinator.
+    #
+    # ADR-083: `required` now interpolates to `true` by default. With
+    # `required: false` a missing store produced a container that started and
+    # then crash-looped on the SEC-002 token check - a restart loop that named
+    # the token, not the missing FILE. With `required: true` Compose refuses
+    # to create ANY container and prints the resolved absolute path of the
+    # file it could not find, which is the actionable message.
+    #
+    # The path is operator-supplied via AWARE_CREDENTIALS_FILE and defaults
+    # to the canonical store location. An operator who deliberately wants the
+    # old soft behaviour (offline / CI bring-up with no credentials) sets
+    # AWARE_CREDENTIALS_REQUIRED=false; the default is loud.
     env_file:
-      - path: ${AWARE_CREDENTIALS_FILE:-redacted-credential-dir/credentials.env}
-        required: false
+      - path: ${AWARE_CREDENTIALS_FILE:-${HOME}/.aware/credentials.env}
+        required: ${AWARE_CREDENTIALS_REQUIRED:-true}
     volumes:
       # C-step finding #16: read-only mount of the shared audit-data
       # volume. The gateway never writes here — only reads, via the
@@ -258,21 +269,37 @@ services:
       # PROVIDER_API_KEY. We also pass through LLM_API_KEY for
       # backward compat with operators still using the legacy name —
       # the config module reads PROVIDER_API_KEY first and falls back
-      # to LLM_API_KEY with a soft deprecation warning. The compose
-      # `env_file:` block references the host's credential-store file
-      # (path is operator-specific; see redacted-credential-dir/env.example),
-      # Operators should either (a) symlink `redacted-credential-dir` to the
-      # canonical location, or (b) source the credentials file into
-      # their shell before invoking docker compose.
-      # See ADR (internal).
-      - LLM_API_KEY=${LLM_API_KEY:-}
-      - MINIMAX_API_KEY=${MINIMAX_API_KEY:-}
-      - PROVIDER_API_HOST=${PROVIDER_API_HOST:-}
+      # to LLM_API_KEY with a soft deprecation warning.
+      #
+      # ADR-083: the provider key, the minimax key, the provider host and
+      # the coordinator token are NOT declared here. Compose merges
+      # `environment:` and `env_file:` into one container environment, and
+      # `environment:` WINS on every key it names. Declaring
+      # `LLM_API_KEY=${LLM_API_KEY:-}` here therefore did not merely
+      # duplicate the credential store's value - it OVERRODE it with the
+      # empty string, so the env_file entry below was dead code for this
+      # key. Measured on 2026-11-24 with the store present, readable and
+      # carrying the key, and the shell unset: the coordinator received
+      # LLM_API_KEY="" and the container crash-looped on the online-mode
+      # guard. The credential store is now the single source of truth for
+      # these keys; see the env_file block below.
+      #
+      # The operator no longer has to source the credential file into their
+      # shell before invoking docker compose. That out-of-band step was
+      # undocumented, was silently skippable, and was the actual cause of
+      # the outage.
+      #
       # 2026-11-10 (scribe): the provider model was previously hard-coded
       # to 'MiniMax-M3' inside the pinned rl-pipeline dependency and could
       # only be changed by republishing that library. rl-pipeline's client
       # already honours options.model; AWARE now passes it through, and
       # this env var selects it. MiniMax-M3.1-Flash is the default.
+      #
+      # ADR-083: AWARE_PROVIDER_MODEL and AWARE_REQUEST_COST_CAP_USD are
+      # ALSO store-owned (the canonical store carries both) but are NOT
+      # removed here, because their compose defaults are non-secret
+      # operator-tunable settings, not secrets. See the env_file block for
+      # the precedence rule.
       - AWARE_PROVIDER_MODEL=${AWARE_PROVIDER_MODEL:-MiniMax-M3.1-Flash}
       # [date-redacted]: OLLAMA_URL re-enabled and pointed at the host's
       # macOS Ollama daemon. The container-side default of 127.0.0.1:11434
@@ -310,16 +337,29 @@ services:
       # volume is the only working path.
       - AWARE_PAIRS_DIR=/data/awareness-pairs
       # The coordinator authenticates with the same password the postgres
-      # service was initialized with (see POSTGRES_PASSWORD below). The
-      # bring-up script sources this from AWARE_DB_PWD or falls back to
-      # the dev-only default below.
+      # service was initialized with (see POSTGRES_PASSWORD below).
+      #
+      # ADR-083: this key STAYS in `environment:`, unlike the provider key
+      # and the bearer token. The postgres password is not a runtime secret -
+      # it is baked into the postgres data volume at INIT time, so it cannot
+      # be re-read from the credential store without invalidating the
+      # password the existing volume was created with. Moving it to
+      # `env_file:` would silently change the coordinator's password to the
+      # store's value while the live volume kept its original one, and the
+      # coordinator would fail every query with an auth error.
+      #
+      # The invariant that matters is that this expression is BYTE-IDENTICAL
+      # to the postgres service's POSTGRES_PASSWORD below. They must be
+      # changed together or not at all. The guard test
+      # (test/unit/scripts/compose-credential-contract.test.js) asserts it.
       - AWARE_POSTGRES_PASSWORD=${AWARE_DB_PWD:-dev-only-pwd}
       # [date-redacted]: SEC-002. Bearer token
-      # required for /coordinate + /budget/status. Operator sets this in the
-      # env_file or shell before compose up. Fail-closed at boot in
+      # required for /coordinate + /budget/status. Fail-closed at boot in
       # NODE_ENV=production if unset or shorter than 32 chars (config.validate()).
       # The gateway must mirror this token in its outbound Authorization header.
-      - AWARE_COORDINATOR_TOKEN=${AWARE_COORDINATOR_TOKEN:-}
+      # ADR-083: supplied by the credential store (env_file below) - NOT
+      # declared here, because `environment:` would override the store.
+      #
       # C-step finding #16: AUDIT_DIR is the path where decision-logger.js
       # writes the hash-chained audit log (decision-chain.jsonl). It must
       # match the gateway's AUDIT_DIR so the gateway's /api/audit/* API
@@ -333,16 +373,35 @@ services:
     # The upstream LLM API key is intentionally NOT hardcoded. The
     # compose file reads the env var from a credential-store file
     # whose path is operator-supplied via the `AWARE_CREDENTIALS_FILE`
-    # env var (default: `redacted-credential-dir/credentials.env`).
-    # Operators set up the credential store as part of install. If the
-    # file is absent (e.g. a CI runner or a fresh dev box), the
-    # coordinator boots in offline-only-disabled mode: with
-    # AWARE_MODE=online (the default), there is no offline fallback,
-    # so /coordinate returns 503 until the key is provided.
-    # Required: false makes this a soft dependency.
+    # env var (default: the canonical store under the operator's home).
+    #
+    # ADR-083: `required` now interpolates to `true` by default, and the
+    # path default resolves to a real location. The previous
+    # `required: false` + placeholder path combination meant a fresh
+    # checkout produced a container that started and then crash-looped on
+    # the online-mode guard - the error named the KEY, not the missing
+    # FILE, and the operator had to guess which file to create.
+    #
+    # With `required: true` Compose refuses to create ANY container and
+    # prints the resolved absolute path of the file it could not find:
+    #   env file /Users/<you>/.aware/credentials.env not found: stat ...
+    # which is the actionable message. An operator who deliberately wants
+    # the old soft behaviour (offline / CI bring-up with no credentials)
+    # sets AWARE_CREDENTIALS_REQUIRED=false; the default is loud.
+    #
+    # PRECEDENCE (ADR-083): Compose merges `environment:` and `env_file:`
+    # into one container environment, and `environment:` WINS on every key
+    # it names. Every key the store owns is therefore DELIBERATELY ABSENT
+    # from the `environment:` block above - LLM_API_KEY, MINIMAX_API_KEY,
+    # AWARE_COORDINATOR_TOKEN, AWARE_POSTGRES_PASSWORD. Non-secret
+    # tunables that the store also carries (AWARE_MODE,
+    # AWARE_REQUEST_COST_CAP_USD, AWARE_PROVIDER_MODEL) are declared here
+    # with their compose defaults, so the compose file remains the
+    # readable source for those and the store only overrides them if the
+    # operator removes the declaration.
     env_file:
-      - path: ${AWARE_CREDENTIALS_FILE:-redacted-credential-dir/credentials.env}
-        required: false
+      - path: ${AWARE_CREDENTIALS_FILE:-${HOME}/.aware/credentials.env}
+        required: ${AWARE_CREDENTIALS_REQUIRED:-true}
     volumes:
       # Named volume for preference-pair output. Phase 1 used a bind
       # mount from redacted-host-config/meta-rl-pipeline/preference-pairs but bind mounts
@@ -438,6 +497,14 @@ services:
   # JSONL to a volume; this is the structured metadata store).
   # Default password is for local dev only — override via the
   # AWARE_DB_PWD env var (see .env.example) in any non-dev deployment.
+  #
+  # ADR-083: this expression MUST stay byte-identical to the
+  # coordinator's AWARE_POSTGRES_PASSWORD (see above). The two are a pair:
+  # the postgres volume is initialised with this password, and the
+  # coordinator authenticates with that same value. They are changed
+  # together or not at all. The guard test
+  # (test/unit/scripts/compose-credential-contract.test.js) asserts the
+  # equality so the pair cannot drift.
   postgres:
     image: postgres:16-alpine
     container_name: aware-2-postgres
@@ -486,13 +553,18 @@ services:
   # active weight checkpoint.
   #
   # SECURITY:
-  # - The Modal token is read from redacted-credential-file at runtime;
+  # - The Modal token is read from the credential store at runtime;
   #   it is NOT in this compose file. The env_file reference below
-  #   uses `required: false` so a host without the credential store
-  #   still brings the trainer up (in disabled-by-config state).
+  #   uses the same `required` contract as the coordinator and the
+  #   gateway (ADR-083), so a missing store fails all three services
+  #   with ONE message naming ONE file, rather than bringing the
+  #   trainer up in a disabled-by-config state.
   # - The trainer is gated behind the `training` profile so the
-  #   default 5-service bring-up (gateway/coordinator/ollama/postgres/redis)
-  #   is unaffected.
+  #   default bring-up (coordinator/postgres/redis) is unaffected.
+  #   Note: `training` is an INDEPENDENT profile, so a
+  #   `--profile training` bring-up does not enable the `full` profile
+  #   and therefore does not start the gateway or the UI. The trainer
+  #   depends only on postgres, so this is coherent.
   # - AWARE_TRAINER_ENABLED defaults to 0 (kill switch off). Setting
   #   it to 1 + having MODAL_TOKEN_ID/SECRET set is the explicit opt-in.
   trainer:
@@ -545,14 +617,17 @@ services:
       - AWARE_DB_ENABLED=${AWARE_DB_ENABLED:-1}
       - AWARE_POSTGRES_PASSWORD=${AWARE_DB_PWD:-dev-only-pwd}
       # [date-redacted]: SEC-002. Bearer token
-      # required for /coordinate + /budget/status. Operator sets this in the
-      # env_file or shell before compose up. Fail-closed at boot in
+      # required for /coordinate + /budget/status. Fail-closed at boot in
       # NODE_ENV=production if unset or shorter than 32 chars (config.validate()).
       # The gateway must mirror this token in its outbound Authorization header.
-      - AWARE_COORDINATOR_TOKEN=${AWARE_COORDINATOR_TOKEN:-}
+      # ADR-083: supplied by the credential store (env_file below) - NOT
+      # declared here, because `environment:` would override the store.
+    # ADR-083: same credential-store contract as the coordinator and the
+    # gateway - same path, same `required` default, so one missing store
+    # fails all three services with ONE message naming ONE file.
     env_file:
-      - path: ${AWARE_CREDENTIALS_FILE:-redacted-credential-dir/credentials.env}
-        required: false
+      - path: ${AWARE_CREDENTIALS_FILE:-${HOME}/.aware/credentials.env}
+        required: ${AWARE_CREDENTIALS_REQUIRED:-true}
     volumes:
       # The trainer's data dir is where it stages DPO dataset JSONLs
       # before they're uploaded to a Modal Volume. A named volume
@@ -608,6 +683,19 @@ services:
       context: ./src/ui
       dockerfile: Dockerfile.ui
     container_name: aware-2-ui
+    # ADR-083: the UI depends on `gateway`, which lives behind the "full"
+    # profile. Without a profile of its own the UI was in the DEFAULT
+    # service set, so `docker compose up -d` (no --profile) failed outright:
+    #   service "aware-2-ui" depends on undefined service "gateway":
+    #   invalid compose project
+    # That broke the documented single-command bring-up (scripts/aware-up,
+    # which README.md points at) independently of the credential defect.
+    # Putting the UI in the same profile as the service it depends on makes
+    # the profile sets coherent:
+    #   default            -> coordinator, postgres, redis
+    #   --profile full     -> + gateway, aware-2-ui
+    #   --profile training -> + trainer
+    profiles: ["full"]
     ports:
       - "${AWARE_UI_PORT:-8081}:8080"
     depends_on:

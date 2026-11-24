@@ -50,38 +50,44 @@ command -v docker >/dev/null || fail "docker not on PATH"
 docker info >/dev/null 2>&1 || fail "docker daemon not reachable"
 log "docker $(docker --version)"
 
-# 1b. Source the canonical credential store if present. This is
-# optional — the compose file uses `required: false` so the stack
-# still boots in offline-only mode without the key. Sourcing here
-# means the host shell has redacted-credential-name + AWARE_POSTGRES_PASSWORD
-# (or whatever the canonical store contains) interpolated into
-# the compose env at up-time. The values never appear in this
-# script's stdout (we log names, not values).
-CREDS_FILE="${HOME}/.redacted-credential-dir/redacted-credential-file"
-if [[ -f "$CREDS_FILE" ]]; then
-  log "sourcing $CREDS_FILE"
-  set -a
-  # shellcheck disable=SC1090
-  source "$CREDS_FILE"
-  set +a
-  log "  redacted-credential-name: $([[ -n "${redacted-credential-name:-}" ]] && echo SET || echo NOT-SET)"
-  log "  AWARE_POSTGRES_PASSWORD: $([[ -n "${AWARE_POSTGRES_PASSWORD:-}" ]] && echo SET || echo NOT-SET)"
-else
-  log "credential store not found at $CREDS_FILE; coordinator will run in offline-only mode"
-fi
-
-# Bridge: AWARE source reads `redacted-credential-name` (config/index.cjs gate + the
-# default-provider the provider client), but the canonical credential store
-# exports `redacted-credential-name`. If redacted-credential-name is unset but redacted-credential-name
-# is set, alias them. Compose env interpolation then sees both names
-# and the coordinator's mode=online gate passes. This avoids forcing
-# every operator to maintain two env entries that hold the same value.
+# 1b. Point Compose at the canonical credential store.
 #
-# See ADR (internal) follow-up: rename in source to redacted-credential-name (single
-# name end-to-end), drop this bridge.
-if [[ -z "${redacted-credential-name:-}" && -n "${redacted-credential-name:-}" ]]; then
-  log "  bridging redacted-credential-name → redacted-credential-name (compose needs both names)"
-  export redacted-credential-name="$redacted-credential-name"
+# ADR-083. The previous version of this block sourced a path that has
+# never existed in this repository's history ("${HOME}/.redacted-credential-dir/
+# redacted-credential-file" — a redaction artifact, not a path), so the
+# `source` never fired and the "credential store not found" branch was the
+# live path on every host. It then ran a "bridge" that expanded a shell
+# variable whose NAME was a redaction artifact, which silently expanded to
+# empty while reporting success.
+#
+# The contract is now:
+#   - the compose file reads the store itself via `env_file:` (required by
+#     default), so there is NO out-of-band step and NO need to export
+#     secrets into the shell;
+#   - this script's job is only to LOCATE the store on this host and tell
+#     Compose where it is.
+#
+# We never print a secret value; we print only whether each key is present.
+CREDENTIALS_FILE="${AWARE_CREDENTIALS_FILE:-${HOME}/.aware/credentials.env}"
+if [[ -f "$CREDENTIALS_FILE" ]]; then
+  log "credential store found at $CREDENTIALS_FILE"
+  export AWARE_CREDENTIALS_FILE="$CREDENTIALS_FILE"
+  # Report presence only, never values.
+  for _key in LLM_API_KEY AWARE_COORDINATOR_TOKEN; do
+    if grep -qE "^[[:space:]]*(export[[:space:]]+)?${_key}=" "$CREDENTIALS_FILE"; then
+      log "  ${_key}: SET"
+    else
+      log "  ${_key}: NOT-SET"
+    fi
+  done
+  unset _key
+else
+  log "credential store NOT found at $CREDENTIALS_FILE"
+  log "  The compose file requires it by default, so 'up' will fail with a"
+  log "  message naming that path and will NOT start any container."
+  log "  Create the file (chmod 600) or point AWARE_CREDENTIALS_FILE at it."
+  log "  For a deliberate soft boot (offline/CI, no credentials), set"
+  log "  AWARE_CREDENTIALS_REQUIRED=false."
 fi
 
 # 2. Validate compose

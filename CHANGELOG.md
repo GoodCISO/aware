@@ -145,7 +145,120 @@ implementation cards use.
 
 - **The vendored specification schemas are pinned and drift-tested.** Every vendored schema's SHA-256 is recorded in `docs/acs/VENDORED.md` and asserted by `test/unit/acs/schema-drift.test.js`, so a specification change is a deliberate, reviewable act. The adapter is isolated behind `src/acs/`, so a version bump touches the pin, the vendored schemas and the drift-test hash table, and nothing else.
 
+### Added (governance-quantity provenance)
+
+- **`src/governance/quantity.js`** — the provenance primitive. Three origins: `derived` (computed
+  from independent evidence by a named producer), `declared` (operator-supplied, no producer),
+  and `orphaned` (a producer exists and is implemented, but is not connected to the quantity that
+  ships). Also the canonical trust-score unit helpers (`normaliseTrustScore`,
+  `formatTrustScore`, `bandTrustScore`) and the four distinct blast-radius kinds, each with one
+  unit.
+- **`src/governance/registry.js`** — the provenance of every governance quantity AWARE ships
+  (10 entries), each with its origin, unit, producer where there is one, and a note explaining
+  the finding. `listNonDerivedQuantities()` returns the quantities that are not measurements.
+- **`test/unit/governance/quantity.test.js`** (24 tests), **`registry.test.js`** (18) and
+  **`provenance-fixes.test.js`** (12) — 52 new tests. `registry.test.js` asserts the registry's
+  claims **against the source**: that `computeTrustScore` exists *and* that `anomaly-scorer` is
+  imported nowhere; that `pheromone-router` is imported nowhere; that nothing writes
+  `agent.metadata.blastRadius`. If someone wires the orphaned producer in, the suite fails and the
+  registry must be corrected. A provenance claim nothing checks is worth nothing.
+- **`test/unit/governance/trust-score-parity.test.js`** — a behavioural guard on the two copies of
+  the trust-score unit contract. `src/ui/src/constants/trust-score.js` and
+  `src/governance/quantity.js` each implement the three helpers; the duplication is forced by the
+  webpack build boundary (`react-scripts`' `ModuleScopePlugin` rejects any import resolving outside
+  `src/ui/src`). This test calls both implementations and compares what they return across a dense
+  input matrix, and pins the thresholds at 0.50/0.51 and 0.80/0.81 so neither copy can drift
+  silently.
+- **ADR-082 — AWARE Governance Quantity Provenance.**
+
+### Changed (governance-quantity provenance)
+
+- **`trustScore` → `declaredTrustScore`** for the quantity that ships. It is operator-set, and the
+  name now says so at every consumption site: `src/api/models/Agent.js`, `src/api/routes/agents.js`,
+  `src/agents/registry.js`, both identity providers, and the attestation result. The JWT claim
+  rename is wire-visible; **both identity providers read the new claim and fall back to the legacy
+  `trustScore`**, so tokens issued before the change keep verifying across a rolling restart
+  (v1 token lifetime 1 h, v2 session 15 min). `src/api/routes/identity-v2.js` now emits
+  `declaredTrustScore` and `declaredBlastRadiusEstimate`.
+- **Four blast-radius mechanisms now have four names.** `blastRadius` (JWT claim) →
+  `declaredBlastRadiusEstimate`; `blastRadius` (kill-signal payload) → `emergencyImpactEstimate`;
+  `blastRadius` (protocol payload) → `protocolBlastRadiusSeverity`. `blastRadiusPenalty` is
+  unchanged — it was already correctly named. The four previously shared one name with four
+  incompatible representations (a `[0,1]` default of `0.1`; the literal `'low'`; a `[0,0.5]`
+  severity penalty; an impact object), across statically disconnected paths, so no type checker
+  could catch the collision. Distinct names make the distinction checkable.
+- **`preview()` now delegates to `evaluate()`.** `evaluate()` has no side effects — it reads the
+  policy store and the tool catalogue and returns a decision — so the preview can call it and
+  derive `wouldBeAllowed` from the returned decision. The preview additionally returns the
+  `decision` it delegated to.
+
+### Fixed (governance-quantity provenance)
+
+- **The UI banded a `[0,1]` value against `0..100` thresholds.** The stored trust score is a
+  fraction — that is the unit in `src/api/models/Agent.js:88` and `:135`, in the JWT claim, in
+  `src/data/agents.json` (0.5, 0.85, 0.7), and in the routing consumer. The UI treated it as
+  `0..100`: `src/ui/src/constants/operators.js` banded at `> 80` / `> 50`, and two components
+  rendered `{agent.trustScore}/100`. **A stored 0.85 therefore displayed as "0.85/100" and banded
+  as "low"** — a fully trusted agent looked untrusted. The display thresholds are unchanged; they
+  are now applied to the percent scale, which is what they always meant.
+- **`preview()` was strictly more permissive than the `evaluate()` it previewed.** It computed its
+  own answer from the risk level alone (`riskLevel !== 'HIGH' && riskLevel !== 'CRITICAL'`), so in
+  a default-deny system a reader who took the preview for the decision would believe low-risk
+  tools were allowed when `evaluate()` denies them.
+- **The audit chain reported `valid: true` for a log with destroyed records.** `valid` is true
+  whenever the chain over the *parseable* records verifies, which is also true after a torn write
+  destroyed records — a caller checking only `valid` reported a damaged log as intact.
+  `verifyChain()` now returns an `integrity` value: `unbroken` (every record verified, none
+  lost), `gapped` (the chain verified over what remains, but records were lost), or `broken` (hash
+  mismatch or linkage break). `valid` is retained for compatibility; `integrity` is the field to
+  read.
+- **The credential-rotation guard was unreachable.** `src/agents/identity-provider.js` tested
+  `decoded.rotatedFrom && agent.credentials.current !== decoded.rotatedFrom && !decoded.rotatedFrom`
+  — the third conjunct is false whenever the second can be true, so the conjunction was never
+  satisfiable and the rotation-rejection branch was dead. **A token minted before a credential
+  rotation kept verifying indefinitely.** The check is now the reachable equivalent.
+- **`src/governance/` added to the npm `files` whitelist.** The whitelist is an explicit directory
+  list, and `src/governance/` was absent from it — so a release would have shipped ADR-082 in
+  `docs/adr/` while the module it describes was missing from the tarball. Verified with
+  `npm pack --dry-run --json`: before, `src/governance/ in tarball: []`; after,
+  `[quantity.js, registry.js]`.
+
 ### Notes
+
+- **This release also carries the governance-quantity provenance work** (ADR-082), which is a
+  separate change set from the ACS support above and is documented in its own subsections.
+  The load-bearing finding: a producer can exist, be implemented and be tested, and still not
+  be connected to the quantity that ships. `computeTrustScore()`
+  (`src/monitoring/anomaly-scorer.js:132`) is a real behavioural producer, yet
+  `src/monitoring/anomaly-scorer.js` is imported nowhere; its consumer,
+  `src/routing/heuristic-calculator.js`, is orphaned in turn via
+  `src/routing/pheromone-router.js`, which the README already records as "built but not yet wired
+  into a runtime path". The trust score that travels in the agent credential is therefore not that
+  score — it is an operator-set field, read by nobody for a decision. A two-valued vocabulary
+  (`derived` / `declared`) cannot express this state, because an auditor checking for a producer
+  would find one and record the quantity as computed. Hence the third origin, `orphaned`.
+- **Test evidence for the governance-quantity change set.** The full unit suite cannot complete on
+  this repository's `main`: four files (`test/unit/gateway/server.test.js`,
+  `test/unit/gateway/audit-routes.test.js`, `test/unit/gateway/cors-allowlist.test.js`,
+  `test/unit/scripts/pre-push-filter.test.js`) hang indefinitely. **This is pre-existing and
+  reproduces on `main` with none of this release's changes applied** — each was verified to hang on
+  a clean worktree at `a78bd3d8`. With those four excluded, the A/B is: `main` 849 tests / 807
+  pass / 42 fail; with the governance work applied, 913 tests / 870 pass / 43 fail — 65 new tests,
+  all passing. The one extra failure in a given run is order-sensitive
+  (`test/unit/coordinator/http-server.test.js`, which passes 46/46 in isolation and appeared as a
+  *baseline-only* failure in a second run; it binds a real random port). A second run produced a
+  different single extra failure (`trainer: submit failure`, 19/19 in isolation). **Zero stable
+  regressions.**
+- Two further slow files are worth knowing about when running the suite by hand:
+  `test/unit/scripts/audit-retention-cleanup.test.js` takes ~31 s, and
+  `test/unit/config/rlm.test.js` spawns `python3` once per test (34 subprocesses) and needs
+  ~200 s. Both pass; a short timeout makes them look like failures.
+- `src/governance/` is not yet imported by any runtime path — it is the documentation of record for
+  the provenance of each quantity, and the registry tests are what keep it honest. Wiring the
+  orphaned anomaly scorer to the shipped trust score is a behavioural change to the identity path
+  and is deliberately **not** part of this release.
+- The `security_sensitive_diff` outcome-filter rule and its test remain unpublished in-progress
+  work and are not part of this release.
 
 - **The specification is a draft.** ACS `v0.4.0-beta.2` is a prerelease, and the release tag does not match the manifest version strings the pinned manifest schema accepts. The pin, the accepted manifest versions and the reasoning are recorded in `docs/acs/VERSION` and `docs/acs/DESIGN.md`.
 - **Rego and Cedar are not evaluated.** A manifest may declare a rego or cedar policy, and the adapter **refuses** such a manifest rather than pretending to evaluate it. AWARE binds through the `custom` policy branch. OPA remains an optional dependency: a user who does not use Rego does not need OPA.

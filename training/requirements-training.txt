@@ -69,7 +69,7 @@ safetensors==0.4.5
 tokenizers>=0.21.0
 
 # Dataset handling (preference-pair JSONL → training-framework dataset format)
-datasets==3.1.0
+datasets==5.0.1
 
 # Modal SDK (called by training/run.py to write checkpoints to a
 # Modal Volume, and to log training metrics)
